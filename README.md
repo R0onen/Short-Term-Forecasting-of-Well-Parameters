@@ -1,0 +1,96 @@
+# Short-Term Forecasting of Well Parameters
+
+Инженерная часть собирает SQLite из опубликованных почасовых записей десяти скважин. База хранит исходные строки, историю измерений, полный календарь, каталог применимости и журнал качества.
+
+## Сборка данных
+
+Из корня репозитория установите зависимости в окружение Python 3.12. Команды ниже используют PowerShell.
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+python -m wells.data.pipeline --raw-dir data/raw --db data/processed/wells.sqlite
+```
+
+Сборка скачивает `train.csv` и `test.csv` ревизии `4004bb78ca8811a87c2892a89e457c59d22ace2b`. При каждом запуске она проверяет SHA-256, заголовок, число записей и границы опубликованных разделов. При несовпадении хеша сначала уберите повреждённый файл из каталога сырых данных, затем повторите команду. Обе границы каждого раздела включены. Почасовые метки хранятся в шкале источника без часового пояса. [Манифест и контрольные суммы](DATASET_ANALYSIS.md#источник-и-разбиение), [публикация Hugging Face](https://huggingface.co/datasets/Arailym-tleubayeva/NK-Oil-Well-Sensor-Monitoring-v2/tree/4004bb78ca8811a87c2892a89e457c59d22ace2b).
+
+Перед пересборкой остановите Streamlit и завершите запись прогнозов. Сборка проверяет временную SQLite перед заменой рабочего файла. После успешной замены три таблицы результатов пусты и прогнозы следует рассчитать заново.
+
+### Подключение прогноза и интерфейса
+
+После появления модулей Студентов 2 и 3 выполните команды в указанном порядке на той же БД.
+
+```powershell
+python -m wells.forecast.run --db data/processed/wells.sqlite --diagnostic
+python -m wells.forecast.run --db data/processed/wells.sqlite |
+    Set-Content -Encoding utf8 data/processed/forecast-report.json
+streamlit run app.py -- --db data/processed/wells.sqlite
+```
+
+Для автономной проверки чтения используйте `tests/fixtures/seed.sql` после `schema.sql` с включёнными внешними ключами. Фикстура содержит демонстрационные строки метрик и прогноза. Сквозные тесты подключают реальные `wells.forecast.run` и `wells.ui.queries` через [согласованные интерфейсы](INTERFACES.md#module-interfaces). Пока модулей нет, pytest показывает причину пропуска. Для подключения участники добавляют свои реализации в принадлежащие им модули.
+
+## Проверки
+
+```powershell
+python -m pytest -q -rs
+$env:WELLS_RUN_OFFICIAL = '1'
+python -m pytest -q -rs
+Remove-Item Env:WELLS_RUN_OFFICIAL
+```
+
+Первый запуск работает на синтетической фикстуре. Второй дополнительно проверяет официальные CSV и сборку во временной БД. При наличии обоих модулей он также дважды проверяет сквозной сценарий. Если входы лежат в другом каталоге, задайте `WELLS_RAW_DIR`.
+
+## SQL для проверки и защиты
+
+Выполните из корня проекта следующий пример, чтобы найти самый длинный разрыв NK-86 и вывести покрытие `line_pressure` для NK-75 по месяцам тестового раздела.
+
+```powershell
+@'
+import sqlite3
+from contextlib import closing
+from pathlib import Path
+
+sql = Path("wells/data/sql")
+db = Path("data/processed/wells.sqlite").resolve()
+with closing(sqlite3.connect(db.as_uri() + "?mode=ro", uri=True)) as conn:
+    gaps = conn.execute((sql / "gaps.sql").read_text(encoding="utf-8"), {
+        "well_id": "NK-86", "parameter": None,
+        "start_ts": "2026-01-01 00:00:00", "end_ts": "2026-10-01 00:00:00",
+    }).fetchall()
+    print(max(gaps, key=lambda row: row[-1]))
+    coverage = conn.execute((sql / "aggregates.sql").read_text(encoding="utf-8"), {
+        "well_id": "NK-75", "parameter": "line_pressure",
+        "start_ts": "2026-08-08 23:00:00", "end_ts": "2026-10-01 00:00:00",
+        "grain": "month", "mode": "clean",
+    }).fetchall()
+    print(coverage)
+'@ | python -
+```
+
+Ожидаемые результаты — 313 пропущенных часов между наблюдениями NK-86 и 0 наблюдений из 1 273 ожидаемых часов для NK-75. Интервал запроса полуоткрытый `[start_ts, end_ts)`. При пересечении с разрывом `gaps.sql` возвращает его полные границы и длину. Знаменатель каждого суточного или месячного агрегата — ожидаемые часы внутри выбранного интервала, включая только применимые серии. Среднее одинаково взвешивает опубликованные часовые значения. Уровни измерений агрегируются по отдельным параметрам и единицам.
+
+Для показа преобразования long → wide подставьте `NK-7` и `2026-01-03 09:00:00` в оба запроса. Опубликованный SPM за этот час равен примерно 5,69 с флагом `spm_outlier`. В wide SPM равен NULL, а `pump_fillage` остаётся примерно 22,29%.
+
+```sql
+SELECT well_id, timestamp, parameter, value, unit, flag, is_usable
+FROM measurements_long
+WHERE well_id = :well_id AND timestamp = :timestamp
+ORDER BY parameter;
+
+SELECT * FROM measurements_wide
+WHERE well_id = :well_id AND timestamp = :timestamp;
+```
+
+При `is_usable = 0` в long сохраняется опубликованное значение, а в wide соответствующая ячейка становится NULL. Другие датчики часа сохраняют свою маску, и наблюдаемый ноль остаётся нулём. У пропущенного применимого часа нет строки в long. Неприменимость видна по отсутствию пары в каталоге. В режиме `raw` агрегаты используют численно корректные значения long до маски, в режиме `clean` — пригодные. В обоих режимах наблюдаемое покрытие включает также помеченные строки.
+
+Для блока защиты сначала покажите официальный split и этот час до и после pivot. Затем покажите разрыв NK-86 и 13 пар, где минимальная нагрузка превышает максимальную. Обе стороны каждой пары замаскированы. В журнале выведите события следующим запросом.
+
+```sql
+SELECT well_id, parameter, timestamp, end_ts, issue_code
+FROM quality_issues
+WHERE action = 'annotate'
+ORDER BY issue_code, well_id, parameter, timestamp;
+```
+
+Для пояснения событий `wells.data.quality.summarize_anomalies` принимает поля `well_id, parameter, timestamp, value` из long и возвращает медианы опубликованных значений по подписанным периодам. У NK-82 медиана площади 7 и 8 мая составляет примерно 12 428 и 207 035. У NK-7 медиана SPM меняется примерно с 4,16 за январь–май до 1,40 с июня, медиана площади — с 3 247 до −1 477, а fillage — с 31,20% до 44,64%. В SQLite эти значения сохраняются в опубликованных единицах. [Анализ событий](DATASET_ANALYSIS.md#проверенные-аномалии-и-решение-для-пайплайна).
