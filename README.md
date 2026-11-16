@@ -13,7 +13,7 @@ python -m pip install -r requirements.txt
 python -m wells.data.pipeline --raw-dir data/raw --db data/processed/wells.sqlite
 ```
 
-Сборка скачивает `train.csv` и `test.csv` ревизии `4004bb78ca8811a87c2892a89e457c59d22ace2b`. При каждом запуске она проверяет SHA-256, заголовок, число записей и границы опубликованных разделов. При несовпадении хеша сначала уберите повреждённый файл из каталога сырых данных, затем повторите команду. Обе границы каждого раздела включены. Почасовые метки хранятся в шкале источника без часового пояса. [Манифест и контрольные суммы](DATASET_ANALYSIS.md#источник-и-разбиение), [публикация Hugging Face](https://huggingface.co/datasets/Arailym-tleubayeva/NK-Oil-Well-Sensor-Monitoring-v2/tree/4004bb78ca8811a87c2892a89e457c59d22ace2b).
+Сборка скачивает `train.csv` и `test.csv` ревизии `4004bb78ca8811a87c2892a89e457c59d22ace2b`. При каждом запуске она проверяет SHA-256, заголовок, число записей и границы опубликованных разделов. При несовпадении хеша сначала уберите повреждённый файл из каталога сырых данных, затем повторите команду. Обе границы каждого раздела включены. Почасовые метки хранятся в шкале источника без часового пояса. [Карточка NK v2](https://huggingface.co/datasets/Arailym-tleubayeva/NK-Oil-Well-Sensor-Monitoring-v2), [train.csv](https://huggingface.co/datasets/Arailym-tleubayeva/NK-Oil-Well-Sensor-Monitoring-v2/resolve/4004bb78ca8811a87c2892a89e457c59d22ace2b/train.csv), [test.csv](https://huggingface.co/datasets/Arailym-tleubayeva/NK-Oil-Well-Sensor-Monitoring-v2/resolve/4004bb78ca8811a87c2892a89e457c59d22ace2b/test.csv), [манифест и контрольные суммы](wells/data/ingest.py).
 
 Перед пересборкой остановите Streamlit и завершите запись прогнозов. Сборка проверяет временную SQLite перед заменой рабочего файла. После успешной замены три таблицы результатов пусты и прогнозы следует рассчитать заново.
 
@@ -28,7 +28,7 @@ python -m wells.forecast.run --db data/processed/wells.sqlite --targets pump_fil
 streamlit run app.py -- --db data/processed/wells.sqlite
 ```
 
-Для автономной проверки чтения используйте `tests/fixtures/seed.sql` после `schema.sql` с включёнными внешними ключами. Фикстура содержит демонстрационные строки метрик и прогноза. Сквозные тесты подключают `wells.forecast.run` и `wells.ui.queries` через [согласованные интерфейсы](INTERFACES.md#module-interfaces).
+Для автономной проверки чтения примените [схему SQLite](wells/data/sql/schema.sql), включите внешние ключи и загрузите [фикстуру](tests/fixtures/seed.sql) с примерами метрик и прогнозов. [Сквозные тесты](tests/test_integration.py) проверяют сборку, прогноз и чтение результатов.
 
 ## Проверки
 
@@ -93,7 +93,7 @@ WHERE action = 'annotate'
 ORDER BY issue_code, well_id, parameter, timestamp;
 ```
 
-Для пояснения событий `wells.data.quality.summarize_anomalies` принимает поля `well_id, parameter, timestamp, value` из long и возвращает медианы опубликованных значений по подписанным периодам. У NK-82 медиана площади 7 и 8 мая составляет примерно 12 428 и 207 035. У NK-7 медиана SPM меняется примерно с 4,16 за январь–май до 1,40 с июня, медиана площади — с 3 247 до −1 477, а fillage — с 31,20% до 44,64%. В SQLite эти значения сохраняются в опубликованных единицах. [Анализ событий](DATASET_ANALYSIS.md#проверенные-аномалии-и-решение-для-пайплайна).
+Для пояснения событий `wells.data.quality.summarize_anomalies` принимает поля `well_id, parameter, timestamp, value` из long и возвращает медианы опубликованных значений по подписанным периодам. У NK-82 медиана площади 7 и 8 мая составляет примерно 12 428 и 207 035. У NK-7 медиана SPM меняется примерно с 4,16 за январь–май до 1,40 с июня, медиана площади — с 3 247 до −1 477, а fillage — с 31,20% до 44,64%. В SQLite эти значения сохраняются в опубликованных единицах. [Аудит качества в отчёте](REPORT.md#4-data-quality-audit).
 
 ## Прогноз и оценка
 
@@ -125,7 +125,7 @@ python -m wells.analysis.figures --db data/processed/wells.sqlite --out reports/
 - `benchmark` измеряет время и память: CSV с типами по умолчанию, оптимизированные типы, чтение по частям (`chunksize`), Parquet, Pandas против SQL и три метода прогноза. Результат — [reports/benchmarks.md](reports/benchmarks.md) и `reports/benchmarks.json`.
 - `figures` строит графики для отчёта в `reports/figures/`.
 
-ER-диаграмма схемы находится в [docs/ER.md](docs/ER.md). Письменный отчёт — [REPORT.md](REPORT.md).
+Итоговые материалы доступны в репозитории. [Отчёт](REPORT.md), [ER-диаграмма](docs/ER.md), [презентация на русском](presentation/well-forecast-defense-ru.pptx), [презентация на английском](presentation/well-forecast-defense.pptx).
 
 ## Бенчмарк на 500 000 записей давления
 
