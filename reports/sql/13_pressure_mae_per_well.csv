@@ -1,0 +1,4 @@
+well_id,unit,mae_naive,mae_seasonal_naive,mae_ridge,mean_coverage
+NK-75,atm,0.482,0.273,0.371,0.903
+NK-76,atm,0.224,0.184,0.148,0.942
+NK-83,atm,1.053,1.192,1.662,0.915

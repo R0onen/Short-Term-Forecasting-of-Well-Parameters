@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 
 from .features import (
+    CLIP_RANGE,
     HORIZONS,
     LAGS,
     TARGET,
@@ -50,7 +51,7 @@ def choose_alpha(macro_mae: dict[float, float]) -> float:
     return PREFERRED_ALPHA if PREFERRED_ALPHA in tied else min(tied)
 
 
-def select_alpha(frames, *, validation_start, test_start, nk7_regime_start, alphas=ALPHAS):
+def select_alpha(frames, *, validation_start, test_start, nk7_regime_start, alphas=ALPHAS, clip_range=CLIP_RANGE):
     """Pick one global alpha from train-only validation.
 
     `frames` maps `(well_id, horizon_h)` to a feature frame. Returns the alpha
@@ -67,7 +68,7 @@ def select_alpha(frames, *, validation_start, test_start, nk7_regime_start, alph
             well_id, horizon_h, "validation",
         )
         for alpha in alphas:
-            pred = predict_ridge(fit_ridge(fit, alpha), val)
+            pred = predict_ridge(fit_ridge(fit, alpha), val, clip_range)
             mae = float((pred - val["y_true"]).abs().mean())
             if not np.isfinite(mae):
                 raise ForecastError(
@@ -97,7 +98,7 @@ def fit_final(frames, alpha: float, *, test_start, nk7_regime_start):
     return pipelines, pd.DataFrame(counts, columns=["well_id", "horizon_h", "n_fit"])
 
 
-def evaluate_backtest(frames, pipelines, *, test_start, test_end):
+def evaluate_backtest(frames, pipelines, *, test_start, test_end, parameter=TARGET, clip_range=CLIP_RANGE):
     """Score the three methods on their common keys in the official test period.
 
     `test_end` is inclusive. Every `(well, horizon, model)` gets a metric row,
@@ -112,7 +113,7 @@ def evaluate_backtest(frames, pipelines, *, test_start, test_end):
         rows = frame[
             (frame["origin_ts"] >= start - _HOUR) & (frame["target_ts"] >= start) & (frame["target_ts"] <= end)
         ]
-        preds = predict_all(pipelines[(well_id, horizon_h)], rows)
+        preds = predict_all(pipelines[(well_id, horizon_h)], rows, clip_range)
         common = rows["y_true"].notna()
         for pred in preds.values():
             common &= pred.notna()
@@ -125,7 +126,7 @@ def evaluate_backtest(frames, pipelines, *, test_start, test_end):
                     pd.DataFrame(
                         {
                             "well_id": well_id,
-                            "parameter": TARGET,
+                            "parameter": parameter,
                             "origin_ts": scored["origin_ts"],
                             "horizon_h": horizon_h,
                             "model": model,
@@ -138,7 +139,7 @@ def evaluate_backtest(frames, pipelines, *, test_start, test_end):
             metrics.append(
                 {
                     "well_id": well_id,
-                    "parameter": TARGET,
+                    "parameter": parameter,
                     "horizon_h": horizon_h,
                     "model": model,
                     "mae": float((y_pred - scored["y_true"]).abs().mean()) if n_common else None,
@@ -167,7 +168,7 @@ def latest_origin(series: pd.Series, *, test_start):
     return full[full].index[-1] if full.any() else None
 
 
-def build_forecast_path(series_by_well, pipelines, *, test_start) -> pd.DataFrame:
+def build_forecast_path(series_by_well, pipelines, *, test_start, parameter=TARGET, clip_range=CLIP_RANGE) -> pd.DataFrame:
     """One 24-horizon trajectory per model from each well's latest eligible origin."""
     parts = []
     for well_id, series in series_by_well.items():
@@ -176,12 +177,12 @@ def build_forecast_path(series_by_well, pipelines, *, test_start) -> pd.DataFram
             continue
         window = series.sort_index().loc[origin - pd.Timedelta(hours=max(LAGS)) : origin]
         for horizon_h in HORIZONS:
-            row = build_features(window, horizon_h).iloc[[-1]]
-            for model, pred in predict_all(pipelines[(well_id, horizon_h)], row).items():
+            row = build_features(window, horizon_h, clip_range).iloc[[-1]]
+            for model, pred in predict_all(pipelines[(well_id, horizon_h)], row, clip_range).items():
                 parts.append(
                     {
                         "well_id": well_id,
-                        "parameter": TARGET,
+                        "parameter": parameter,
                         "origin_ts": origin,
                         "horizon_h": horizon_h,
                         "model": model,

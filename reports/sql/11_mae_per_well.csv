@@ -1,0 +1,8 @@
+well_id,well_type,mae_naive,mae_seasonal_naive,mae_ridge,mean_coverage
+NK-77,sucker_rod_pump,4.425,4.899,4.368,0.882
+NK-68,sucker_rod_pump,5.161,5.848,5.431,0.917
+NK-91,sucker_rod_pump,10.48,12.037,8.436,0.821
+NK-86,sucker_rod_pump,12.049,12.674,10.719,0.906
+NK-82,sucker_rod_pump,14.632,15.096,13.12,0.822
+NK-93,sucker_rod_pump,16.554,16.936,13.832,0.85
+NK-7,sucker_rod_pump,20.604,21.41,14.942,0.839

@@ -297,3 +297,52 @@ def test_missing_database_is_not_created(tmp_path, capsys):
     assert run_module.main(["--db", str(missing)]) == 1
     assert not missing.exists()
     assert "database not found" in capsys.readouterr().err
+
+
+# ---- extension: second target (tubing_pressure of fountain wells) ----------
+
+def _with_pressure(db):
+    """Give NK-76 a complete synthetic tubing_pressure series above 100 atm."""
+    conn = sqlite3.connect(db)
+    conn.execute("UPDATE measurements_wide SET tubing_pressure = 120 + CAST(strftime('%H', timestamp) AS INTEGER) "
+                 "WHERE well_id = 'NK-76'")
+    conn.commit()
+    conn.close()
+
+
+def test_unbounded_target_is_clipped_only_below():
+    index = pd.date_range("2026-03-01", periods=80, freq="h")
+    s = pd.Series(150.0 + np.arange(80) % 24, index=index)
+    with pytest.raises(ValueError):
+        build_features(s, 1)  # default range is the 0-100 % of pump_fillage
+    frame = build_features(s, 1, (0.0, None))
+    assert predict_ridge(_Constant(250.0), frame, (0.0, None)).max() == 250.0
+    assert predict_ridge(_Constant(-5.0), frame, (0.0, None)).max() == 0.0
+    assert predict_ridge(_Constant(250.0), frame).max() == 100.0
+
+
+def test_run_with_pressure_target(db):
+    _with_pressure(db)
+    report = run_forecast(db, targets=["pump_fillage", "tubing_pressure"], **DATES)
+    assert dict(query(db, "SELECT parameter, count(*) FROM metrics GROUP BY parameter")) == {
+        "pump_fillage": 72, "tubing_pressure": 72}
+    assert query(db, "SELECT DISTINCT well_id FROM forecast_path WHERE parameter = 'tubing_pressure'") == [("NK-76",)]
+    assert query(db, "SELECT min(y_pred) > 100 FROM backtest_predictions WHERE parameter = 'tubing_pressure'") == [(1,)]
+    assert report["config"]["target"] == "pump_fillage"
+    extra = report["extra_targets"]["tubing_pressure"]
+    assert extra["config"]["wells"] == ["NK-76"] and extra["config"]["clip_range"] == [0.0, None]
+    assert query(db, "PRAGMA foreign_key_check") == []
+
+    # the default run publishes the approved target only and drops the extension rows
+    again = run_forecast(db, **DATES)
+    assert "extra_targets" not in again
+    assert query(db, "SELECT DISTINCT parameter FROM metrics") == [("pump_fillage",)]
+
+
+def test_failing_extra_target_publishes_nothing(db):
+    before = _results(db)  # NK-76 pressure in the fixture has two observations, so no fit rows
+    with pytest.raises(ForecastError, match="well=NK-76"):
+        run_forecast(db, targets=["pump_fillage", "tubing_pressure"], **DATES)
+    with pytest.raises(ForecastError, match="unsupported target"):
+        run_forecast(db, targets=["SPM"], **DATES)
+    assert _results(db) == before

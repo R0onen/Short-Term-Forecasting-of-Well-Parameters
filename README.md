@@ -94,3 +94,57 @@ ORDER BY issue_code, well_id, parameter, timestamp;
 ```
 
 Для пояснения событий `wells.data.quality.summarize_anomalies` принимает поля `well_id, parameter, timestamp, value` из long и возвращает медианы опубликованных значений по подписанным периодам. У NK-82 медиана площади 7 и 8 мая составляет примерно 12 428 и 207 035. У NK-7 медиана SPM меняется примерно с 4,16 за январь–май до 1,40 с июня, медиана площади — с 3 247 до −1 477, а fillage — с 31,20% до 44,64%. В SQLite эти значения сохраняются в опубликованных единицах. [Анализ событий](DATASET_ANALYSIS.md#проверенные-аномалии-и-решение-для-пайплайна).
+
+## Прогноз и оценка
+
+Модуль `wells.forecast` прогнозирует `pump_fillage` на 1–24 часа вперёд для семи насосных скважин и сравнивает три метода: naive, seasonal naive и Ridge-регрессию на лагах. Используется опубликованное хронологическое разбиение без перемешивания. Параметр `alpha` выбирается только на обучающей части (валидация с 2026-07-15), тестовые значения в обучении не участвуют.
+
+```powershell
+python -m wells.forecast.run --db data/processed/wells.sqlite --diagnostic
+python -m wells.forecast.run --db data/processed/wells.sqlite |
+    Set-Content -Encoding utf8 data/processed/forecast-report.json
+```
+
+Первая команда только читает БД и проверяет границы обучения на NK-7. Вторая заполняет таблицы `backtest_predictions`, `metrics` и `forecast_path` в одной транзакции и печатает JSON-отчёт о запуске.
+
+
+### Расширение: прогноз давления фонтанных скважин
+
+```powershell
+python -m wells.forecast.run --db data/processed/wells.sqlite --targets pump_fillage tubing_pressure
+```
+
+С флагом `--targets` те же три метода дополнительно применяются к `tubing_pressure` трёх фонтанных скважин. Запуск без флага рассчитывает только `pump_fillage` и удаляет строки расширения. Дашборд пока показывает прогноз только для `pump_fillage`; результаты по давлению доступны в таблицах `metrics`, `backtest_predictions`, `forecast_path` и в разделе 9 отчёта.
+
+## Дашборд
+
+```powershell
+streamlit run app.py -- --db data/processed/wells.sqlite
+```
+
+В боковой панели выбираются тип скважины, скважина, параметр и период. Три раздела показывают историю и EDA, качество данных, прогноз и оценку. Все пять графиков интерактивные (Plotly).
+
+## SQL-запросы, замеры и графики отчёта
+
+```powershell
+python -m wells.analysis.sql_report --db data/processed/wells.sqlite --out reports
+python -m wells.analysis.benchmark --raw-dir data/raw --db data/processed/wells.sqlite --out reports
+python -m wells.analysis.figures --db data/processed/wells.sqlite --out reports/figures
+```
+
+- `sql_report` выполняет 14 аналитических запросов (JOIN, GROUP BY/HAVING, CTE, подзапросы, оконные функции `LAG` и `RANK`), загружает результаты в Pandas и сохраняет их в `reports/sql/*.csv` и [reports/sql_queries.md](reports/sql_queries.md).
+- `benchmark` измеряет время и память: CSV с типами по умолчанию, оптимизированные типы, чтение по частям (`chunksize`), Parquet, Pandas против SQL и три метода прогноза. Результат — [reports/benchmarks.md](reports/benchmarks.md) и `reports/benchmarks.json`.
+- `figures` строит графики для отчёта в `reports/figures/`.
+
+ER-диаграмма схемы находится в [docs/ER.md](docs/ER.md). Письменный отчёт — [REPORT.md](REPORT.md).
+
+## Структура проекта
+
+| Путь | Назначение |
+| --- | --- |
+| `wells/data/` | Загрузка CSV, проверка и аудит качества, pivot long → wide, сборка SQLite, SQL для пропусков и агрегатов |
+| `wells/forecast/` | Признаки, baseline-методы, Ridge, оценка на тесте, публикация результатов |
+| `wells/ui/`, `app.py` | Чтение SQLite, EDA, графики Plotly и приложение Streamlit |
+| `wells/analysis/` | Набор SQL-запросов, замеры времени и памяти, графики отчёта |
+| `tests/` | Тесты данных, прогноза, интерфейса и сквозной сборки |
+| `reports/` | Сохранённые результаты запросов, замеров и графики |
