@@ -1,0 +1,109 @@
+{
+  "loading": [
+    {
+      "approach": "CSV, default dtypes",
+      "seconds": 0.16377249999982268,
+      "peak_mb": 44.592952728271484,
+      "in_memory_mb": 85.8029375076294,
+      "file_mb": 18.9263858795166,
+      "rows": 258387
+    },
+    {
+      "approach": "CSV, category/int16 dtypes",
+      "seconds": 1.0642143000000033,
+      "peak_mb": 47.2110595703125,
+      "in_memory_mb": 5.670146942138672,
+      "file_mb": 18.9263858795166,
+      "rows": 258387
+    },
+    {
+      "approach": "CSV, chunksize=50000 aggregation",
+      "seconds": 0.15368790000002264,
+      "peak_mb": 4.527578353881836,
+      "in_memory_mb": null,
+      "file_mb": 18.9263858795166,
+      "rows": 258387
+    },
+    {
+      "approach": "Parquet (pyarrow), optimized dtypes",
+      "seconds": 0.03578210000000581,
+      "peak_mb": 2.3530197143554688,
+      "in_memory_mb": 5.670433044433594,
+      "file_mb": 1.8132801055908203,
+      "rows": 258387,
+      "write_seconds": 0.09561669999993683
+    }
+  ],
+  "pandas_vs_sql": [
+    {
+      "task": "long -> wide pivot",
+      "approach": "Pandas pivot",
+      "seconds": 0.07919609999999011,
+      "peak_mb": 23.0709171295166,
+      "result_rows": 63470
+    },
+    {
+      "task": "long -> wide pivot",
+      "approach": "SQL conditional aggregation",
+      "seconds": 0.46146380000004683,
+      "peak_mb": 33.528900146484375,
+      "result_rows": 63470
+    },
+    {
+      "task": "daily mean per series",
+      "approach": "Pandas groupby",
+      "seconds": 0.1543991000000915,
+      "peak_mb": 41.980690002441406,
+      "result_rows": 10959
+    },
+    {
+      "task": "daily mean per series",
+      "approach": "SQL GROUP BY",
+      "seconds": 0.5639991000000464,
+      "peak_mb": 3.386075019836426,
+      "result_rows": 10959
+    }
+  ],
+  "models": [
+    {
+      "model": "naive",
+      "fit_seconds": 0.0,
+      "predict_seconds": 0.012779899999941335,
+      "peak_mb": 2.0332412719726562,
+      "mean_mae": 11.986485719705072,
+      "groups": 168
+    },
+    {
+      "model": "seasonal_naive",
+      "fit_seconds": 0.0,
+      "predict_seconds": 0.014452299999902607,
+      "peak_mb": 2.0167312622070312,
+      "mean_mae": 12.699991674080778,
+      "groups": 168
+    },
+    {
+      "model": "ridge",
+      "fit_seconds": 1.3247873000000254,
+      "predict_seconds": 0.8417603000000327,
+      "peak_mb": 2.7521629333496094,
+      "mean_mae": 10.12119909988279,
+      "groups": 168
+    },
+    {
+      "model": "shared: feature building",
+      "fit_seconds": 0.0,
+      "predict_seconds": 12.505130300000019,
+      "peak_mb": 122.18778324127197,
+      "mean_mae": null,
+      "groups": 168
+    },
+    {
+      "model": "shared: full backtest scoring",
+      "fit_seconds": 0.0,
+      "predict_seconds": 2.3383748999999625,
+      "peak_mb": null,
+      "mean_mae": null,
+      "groups": 168
+    }
+  ]
+}

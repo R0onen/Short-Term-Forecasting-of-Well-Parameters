@@ -1,0 +1,11 @@
+parameter,regime,n_hours,mean_value,min_value,max_value
+SPM,before_june,3539,4.166,0.0,6.66
+SPM,from_june,2880,1.559,0.0,7.268
+dynamometer_area,before_june,2703,5647.339,0.0,256351.957
+dynamometer_area,from_june,69,77358.176,88.748,374012.835
+max_rod_weight,before_june,3392,8429.555,0.0,28253.714
+max_rod_weight,from_june,431,12890.591,0.0,29185.0
+min_rod_weight,before_june,3427,7669.5,0.0,28696.143
+min_rod_weight,from_june,1637,15204.981,0.0,29713.333
+pump_fillage,before_june,2858,35.068,0.0,100.0
+pump_fillage,from_june,2695,45.085,0.046,100.0

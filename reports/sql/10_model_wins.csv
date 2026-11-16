@@ -1,0 +1,4 @@
+model,groups_won,mean_mae_when_best
+ridge,143,10.891
+naive,25,5.345
+seasonal_naive,2,5.253

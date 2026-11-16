@@ -1,0 +1,8 @@
+issue_code,action,n_issues,wells,first_ts,last_ts,n_in_test
+weight_overflow,mask,4098,4,2026-05-07 20:00:00,2026-09-30 23:00:00,2208
+area_negative,mask,2921,6,2026-02-03 02:00:00,2026-09-30 23:00:00,1243
+area_extreme,mask,97,3,2026-06-13 11:00:00,2026-09-30 17:00:00,64
+reversed_rod_load,mask,26,2,2026-06-14 12:00:00,2026-08-23 09:00:00,2
+area_scale_shift,annotate,8,7,2026-05-01 00:00:00,2026-05-08 00:00:00,0
+nk7_regime_change,annotate,3,1,2026-06-01 00:00:00,2026-06-01 00:00:00,0
+spm_outlier,mask,2,2,2026-01-03 09:00:00,2026-08-21 23:00:00,1
