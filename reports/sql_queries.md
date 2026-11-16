@@ -278,7 +278,7 @@ WITH ranked AS (
     SELECT well_id, horizon_h, model, mae,
            RANK() OVER (PARTITION BY well_id, horizon_h ORDER BY mae) AS place
     FROM metrics
-    WHERE mae IS NOT NULL
+    WHERE mae IS NOT NULL AND parameter = 'pump_fillage'
 )
 SELECT model, COUNT(*) AS groups_won, ROUND(AVG(mae), 3) AS mean_mae_when_best
 FROM ranked
@@ -306,6 +306,7 @@ SELECT m.well_id, c.well_type,
        ROUND(AVG(m.coverage), 3) AS mean_coverage
 FROM metrics AS m
 JOIN series_catalog AS c ON c.well_id = m.well_id AND c.parameter = m.parameter
+WHERE m.parameter = 'pump_fillage'
 GROUP BY m.well_id, c.well_type
 ORDER BY mae_ridge
 
@@ -332,6 +333,7 @@ SELECT horizon_h,
        ROUND(AVG(CASE WHEN model = 'ridge' THEN mae END), 3) AS mae_ridge,
        SUM(CASE WHEN model = 'ridge' THEN n_common END) AS n_common
 FROM metrics
+WHERE parameter = 'pump_fillage'
 GROUP BY horizon_h
 ORDER BY horizon_h
 
@@ -353,3 +355,61 @@ ORDER BY horizon_h
 | 12 | 12.278 | 12.629 | 10.335 | 7335 |
 
 _First 12 rows shown; full result in `reports/sql/12_mae_by_horizon.csv`._
+
+## 13_pressure_mae_per_well
+
+Extension: tubing_pressure MAE per fountain well and method (empty unless the pressure target was run). SQL features: JOIN, conditional aggregation. Rows returned: 3.
+
+```sql
+SELECT m.well_id, c.unit,
+       ROUND(AVG(CASE WHEN m.model = 'naive' THEN m.mae END), 3) AS mae_naive,
+       ROUND(AVG(CASE WHEN m.model = 'seasonal_naive' THEN m.mae END), 3) AS mae_seasonal_naive,
+       ROUND(AVG(CASE WHEN m.model = 'ridge' THEN m.mae END), 3) AS mae_ridge,
+       ROUND(AVG(m.coverage), 3) AS mean_coverage
+FROM metrics AS m
+JOIN series_catalog AS c ON c.well_id = m.well_id AND c.parameter = m.parameter
+WHERE m.parameter = 'tubing_pressure'
+GROUP BY m.well_id, c.unit
+ORDER BY m.well_id
+
+```
+
+| well_id | unit | mae_naive | mae_seasonal_naive | mae_ridge | mean_coverage |
+| --- | --- | --- | --- | --- | --- |
+| NK-75 | atm | 0.482 | 0.273 | 0.371 | 0.903 |
+| NK-76 | atm | 0.224 | 0.184 | 0.148 | 0.942 |
+| NK-83 | atm | 1.053 | 1.192 | 1.662 | 0.915 |
+
+## 14_pressure_mae_by_horizon
+
+Extension: mean tubing_pressure MAE across fountain wells for every horizon and method. SQL features: GROUP BY, conditional aggregation. Rows returned: 24.
+
+```sql
+SELECT horizon_h,
+       ROUND(AVG(CASE WHEN model = 'naive' THEN mae END), 3) AS mae_naive,
+       ROUND(AVG(CASE WHEN model = 'seasonal_naive' THEN mae END), 3) AS mae_seasonal_naive,
+       ROUND(AVG(CASE WHEN model = 'ridge' THEN mae END), 3) AS mae_ridge,
+       SUM(CASE WHEN model = 'ridge' THEN n_common END) AS n_common
+FROM metrics
+WHERE parameter = 'tubing_pressure'
+GROUP BY horizon_h
+ORDER BY horizon_h
+
+```
+
+| horizon_h | mae_naive | mae_seasonal_naive | mae_ridge | n_common |
+| --- | --- | --- | --- | --- |
+| 1 | 0.193 | 0.542 | 0.241 | 3500 |
+| 2 | 0.28 | 0.539 | 0.339 | 3483 |
+| 3 | 0.345 | 0.54 | 0.4 | 3471 |
+| 4 | 0.416 | 0.543 | 0.461 | 3464 |
+| 5 | 0.475 | 0.54 | 0.513 | 3457 |
+| 6 | 0.525 | 0.545 | 0.559 | 3451 |
+| 7 | 0.576 | 0.546 | 0.607 | 3445 |
+| 8 | 0.625 | 0.549 | 0.65 | 3443 |
+| 9 | 0.658 | 0.551 | 0.682 | 3443 |
+| 10 | 0.695 | 0.551 | 0.72 | 3441 |
+| 11 | 0.715 | 0.553 | 0.748 | 3439 |
+| 12 | 0.725 | 0.552 | 0.776 | 3445 |
+
+_First 12 rows shown; full result in `reports/sql/14_pressure_mae_by_horizon.csv`._

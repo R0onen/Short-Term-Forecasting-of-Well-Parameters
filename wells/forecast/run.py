@@ -36,6 +36,7 @@ from .features import (
     REGIME_WELL,
     RIDGE_FEATURES,
     TARGET,
+    TARGET_RANGES,
     ForecastError,
     build_features,
     eligible_fit_rows,
@@ -72,8 +73,10 @@ def _connect(db_path: Path, mode: str) -> sqlite3.Connection:
     return conn
 
 
-def _load(conn: sqlite3.Connection, *, train_only: bool = False):
-    """Return metadata and one hourly target series per supported well."""
+def _load(conn: sqlite3.Connection, *, train_only: bool = False, target: str = TARGET):
+    """Return metadata and one hourly target series per well that has the target sensor."""
+    if target not in TARGET_RANGES:  # allowlist: the name is used as a column identifier
+        raise ForecastError(f"unsupported target {target!r}; choose from {sorted(TARGET_RANGES)}")
     for table, columns in REQUIRED_TABLES.items():
         present = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
         missing = [c for c in columns if c not in present]
@@ -84,15 +87,15 @@ def _load(conn: sqlite3.Connection, *, train_only: bool = False):
     if absent:
         raise ForecastError(f"dataset_meta lacks {absent}")
     wells = [r[0] for r in conn.execute(
-        "SELECT well_id FROM series_catalog WHERE parameter = ? ORDER BY well_id", (TARGET,)
+        "SELECT well_id FROM series_catalog WHERE parameter = ? ORDER BY well_id", (target,)
     )]
     if not wells:
-        raise ForecastError(f"catalog has no {TARGET} series")
-    if meta["revision"] == PINNED_REVISION and wells != sorted(PINNED_WELLS):
+        raise ForecastError(f"catalog has no {target} series")
+    if target == TARGET and meta["revision"] == PINNED_REVISION and wells != sorted(PINNED_WELLS):
         raise ForecastError(f"unexpected {TARGET} wells for the pinned revision: {wells}")
     where = "WHERE split = 'train'" if train_only else ""
     wide = pd.read_sql_query(
-        f"SELECT well_id, timestamp, {TARGET} AS y FROM measurements_wide {where} ORDER BY well_id, timestamp",
+        f"SELECT well_id, timestamp, {target} AS y FROM measurements_wide {where} ORDER BY well_id, timestamp",
         conn,
         parse_dates=["timestamp"],
     )
@@ -104,8 +107,8 @@ def _load(conn: sqlite3.Connection, *, train_only: bool = False):
     return meta, series
 
 
-def _frames(series_by_well, horizons=HORIZONS):
-    return {(well, h): build_features(s, h) for well, s in series_by_well.items() for h in horizons}
+def _frames(series_by_well, horizons=HORIZONS, value_range=CLIP_RANGE):
+    return {(well, h): build_features(s, h, value_range) for well, s in series_by_well.items() for h in horizons}
 
 
 def _records(frame: pd.DataFrame) -> list[dict]:
@@ -118,7 +121,8 @@ def _records(frame: pd.DataFrame) -> list[dict]:
     return out.to_dict("records")
 
 
-def _check_outputs(predictions: pd.DataFrame, metrics: pd.DataFrame, path: pd.DataFrame, n_groups: int) -> None:
+def _check_outputs(predictions: pd.DataFrame, metrics: pd.DataFrame, path: pd.DataFrame, n_groups: int,
+                   clip_range=CLIP_RANGE) -> None:
     """Writer-side contract checks before anything is committed."""
     for name, table in (("backtest_predictions", predictions), ("forecast_path", path)):
         if table.empty:
@@ -127,8 +131,10 @@ def _check_outputs(predictions: pd.DataFrame, metrics: pd.DataFrame, path: pd.Da
         if not (table["target_ts"] == table["origin_ts"] + step).all():
             raise ForecastError(f"{name}: target_ts != origin_ts + horizon_h")
         y = table["y_pred"].astype(float)
-        if not (np.isfinite(y) & (y >= CLIP_RANGE[0]) & (y <= CLIP_RANGE[1])).all():
-            raise ForecastError(f"{name}: prediction outside [0, 100] or non-finite")
+        low, high = clip_range
+        in_range = np.isfinite(y) & (y >= low) & (True if high is None else y <= high)
+        if not in_range.all():
+            raise ForecastError(f"{name}: prediction outside the valid range or non-finite")
     if not predictions.empty:
         per_key = predictions.groupby(["well_id", "origin_ts", "horizon_h"])["model"].nunique()
         if not (per_key == len(MODELS)).all():
@@ -173,9 +179,9 @@ def _environment() -> dict:
     }
 
 
-def _config(meta, wells, horizons, validation_start, nk7_regime_start) -> dict:
+def _config(meta, wells, horizons, validation_start, nk7_regime_start, target=TARGET) -> dict:
     return {
-        "target": TARGET,
+        "target": target,
         "validation_start": str(validation_start),
         "train_end": meta["train_end"],
         "test_start": meta["test_start"],
@@ -186,7 +192,7 @@ def _config(meta, wells, horizons, validation_start, nk7_regime_start) -> dict:
         "feature_order": RIDGE_FEATURES,
         "scaler": "StandardScaler",
         "ridge": {"fit_intercept": True},
-        "clip_range": list(CLIP_RANGE),
+        "clip_range": list(TARGET_RANGES[target]),
         "alpha_candidates": list(ALPHAS),
         "tie_rule": f"prefer {PREFERRED_ALPHA} if tied, otherwise the smallest tied alpha",
     }
@@ -200,39 +206,70 @@ def _validation_report(alpha, table: pd.DataFrame) -> dict:
     }
 
 
-def run_forecast(db_path: Path, *, validation_start=None, nk7_regime_start=None) -> dict:
-    """Run the full experiment, publish results and return the run report."""
-    validation_start = validation_start or DEFAULT_VALIDATION_START
-    nk7_regime_start = nk7_regime_start or DEFAULT_NK7_REGIME_START
-    with closing(_connect(db_path, "rw")) as conn:
-        meta, series = _load(conn)
-        test_start, test_end = meta["test_start"], meta["test_end"]
-        frames = _frames(series)
+def _evaluate_target(conn, target: str, validation_start, nk7_regime_start) -> dict:
+    """Select alpha, refit, backtest and build the release for one target. Writes nothing."""
+    clip_range = TARGET_RANGES.get(target, CLIP_RANGE)
+    meta, series = _load(conn, target=target)
+    test_start, test_end = meta["test_start"], meta["test_end"]
+    frames = _frames(series, value_range=clip_range)
 
-        alpha, validation = select_alpha(
-            frames, validation_start=validation_start, test_start=test_start, nk7_regime_start=nk7_regime_start
-        )
-        pipelines, fit_counts = fit_final(frames, alpha, test_start=test_start, nk7_regime_start=nk7_regime_start)
-        predictions, metrics = evaluate_backtest(frames, pipelines, test_start=test_start, test_end=test_end)
-        path = build_forecast_path(series, pipelines, test_start=test_start)
-        _check_outputs(predictions, metrics, path, len(frames))
-
-        try:
-            _publish(conn, {"backtest_predictions": predictions, "metrics": metrics, "forecast_path": path})
-        except sqlite3.Error as exc:
-            raise ForecastError(f"publication failed, previous results kept: {exc}") from exc
+    alpha, validation = select_alpha(
+        frames, validation_start=validation_start, test_start=test_start, nk7_regime_start=nk7_regime_start,
+        clip_range=clip_range,
+    )
+    pipelines, fit_counts = fit_final(frames, alpha, test_start=test_start, nk7_regime_start=nk7_regime_start)
+    predictions, metrics = evaluate_backtest(
+        frames, pipelines, test_start=test_start, test_end=test_end, parameter=target, clip_range=clip_range
+    )
+    path = build_forecast_path(series, pipelines, test_start=test_start, parameter=target, clip_range=clip_range)
+    _check_outputs(predictions, metrics, path, len(frames), clip_range)
 
     origins = path.groupby("well_id")["origin_ts"].first().dt.strftime(TS_FORMAT).to_dict()
     return {
-        "dataset": {k: meta[k] for k in ("revision", "train_sha256", "test_sha256")},
+        "meta": meta,
+        "tables": {"backtest_predictions": predictions, "metrics": metrics, "forecast_path": path},
+        "report": {
+            "config": _config(meta, series, HORIZONS, validation_start, nk7_regime_start, target),
+            "validation": _validation_report(alpha, validation),
+            "final_fit_counts": _records(fit_counts),
+            "release_origins": {well: origins.get(well) for well in series},
+        },
+    }
+
+
+def run_forecast(db_path: Path, *, validation_start=None, nk7_regime_start=None, targets=None) -> dict:
+    """Run the full experiment, publish results and return the run report.
+
+    `targets` defaults to the approved `pump_fillage`. Extra targets (for
+    example `tubing_pressure` of the fountain wells) are an opt-in extension;
+    the top-level report sections always describe the first target and
+    `extra_targets` holds the same sections for the others.
+    """
+    validation_start = validation_start or DEFAULT_VALIDATION_START
+    nk7_regime_start = nk7_regime_start or DEFAULT_NK7_REGIME_START
+    targets = list(dict.fromkeys(targets or [TARGET]))
+    with closing(_connect(db_path, "rw")) as conn:
+        results = {t: _evaluate_target(conn, t, validation_start, nk7_regime_start) for t in targets}
+        tables = {
+            name: pd.concat([results[t]["tables"][name] for t in targets], ignore_index=True)
+            for name in RESULT_TABLES
+        }
+        try:
+            _publish(conn, tables)
+        except sqlite3.Error as exc:
+            raise ForecastError(f"publication failed, previous results kept: {exc}") from exc
+
+    primary = results[targets[0]]
+    report = {
+        "dataset": {k: primary["meta"][k] for k in ("revision", "train_sha256", "test_sha256")},
         "code": _code_state(),
         "environment": _environment(),
-        "config": _config(meta, series, HORIZONS, validation_start, nk7_regime_start),
-        "validation": _validation_report(alpha, validation),
-        "final_fit_counts": _records(fit_counts),
-        "table_counts": {"backtest_predictions": len(predictions), "metrics": len(metrics), "forecast_path": len(path)},
-        "release_origins": {well: origins.get(well) for well in series},
+        **primary["report"],
+        "table_counts": {name: len(table) for name, table in tables.items()},
     }
+    if len(targets) > 1:
+        report["extra_targets"] = {t: results[t]["report"] for t in targets[1:]}
+    return report
 
 
 def run_diagnostic(db_path: Path, *, validation_start=None, nk7_regime_start=None, well_id=REGIME_WELL) -> dict:
@@ -285,12 +322,14 @@ def run_diagnostic(db_path: Path, *, validation_start=None, nk7_regime_start=Non
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description="Evaluate and publish pump_fillage forecasts.")
+    parser = argparse.ArgumentParser(description="Evaluate and publish short-term well forecasts.")
     parser.add_argument("--db", type=Path, default=DEFAULT_DB)
     parser.add_argument("--diagnostic", action="store_true", help="read-only train-only check, no DB writes")
+    parser.add_argument("--targets", nargs="+", choices=sorted(TARGET_RANGES), default=[TARGET],
+                        help="targets to forecast; the default is the approved pump_fillage only")
     args = parser.parse_args(argv)
     try:
-        report = run_diagnostic(args.db) if args.diagnostic else run_forecast(args.db)
+        report = run_diagnostic(args.db) if args.diagnostic else run_forecast(args.db, targets=args.targets)
     except (ForecastError, ValueError, sqlite3.Error) as exc:
         print(f"forecast failed: {exc}", file=sys.stderr)
         return 1

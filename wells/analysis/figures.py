@@ -37,17 +37,29 @@ def _save(fig, out_dir: Path, name: str) -> Path:
     return path
 
 
-def mae_by_horizon(conn, out_dir: Path) -> Path:
-    data = pd.read_sql_query(QUERIES["12_mae_by_horizon"][2], conn)
+def _horizon_chart(conn, out_dir: Path, query: str, ylabel: str, title: str, name: str):
+    data = pd.read_sql_query(QUERIES[query][2], conn)
+    if data.empty:  # the optional target was not run
+        return None
     fig, ax = plt.subplots(figsize=(8, 4.5))
     for model, (label, color) in MODEL_STYLE.items():
         ax.plot(data["horizon_h"], data[f"mae_{model}"], marker="o", markersize=3, label=label, color=color)
-    ax.set(xlabel="Forecast horizon, hours", ylabel="MAE, percentage points",
-           title="pump_fillage: mean MAE over 7 wells, official test period")
+    ax.set(xlabel="Forecast horizon, hours", ylabel=ylabel, title=title)
     ax.set_xticks(range(1, 25, 2))
     ax.grid(alpha=0.3)
     ax.legend()
-    return _save(fig, out_dir, "mae_by_horizon.png")
+    return _save(fig, out_dir, name)
+
+
+def mae_by_horizon(conn, out_dir: Path):
+    return _horizon_chart(conn, out_dir, "12_mae_by_horizon", "MAE, percentage points",
+                          "pump_fillage: mean MAE over 7 wells, official test period", "mae_by_horizon.png")
+
+
+def pressure_mae_by_horizon(conn, out_dir: Path):
+    return _horizon_chart(conn, out_dir, "14_pressure_mae_by_horizon", "MAE, atm",
+                          "tubing_pressure: mean MAE over 3 fountain wells, official test period",
+                          "pressure_mae_by_horizon.png")
 
 
 def mae_per_well(conn, out_dir: Path) -> Path:
@@ -123,7 +135,7 @@ def daily_profile(conn, out_dir: Path) -> Path:
     return _save(fig, out_dir, "daily_profile.png")
 
 
-FIGURES = [mae_by_horizon, mae_per_well, forecast_example, area_scale_shift, nk7_regime, daily_profile]
+FIGURES = [mae_by_horizon, pressure_mae_by_horizon, mae_per_well, forecast_example, area_scale_shift, nk7_regime, daily_profile]
 
 
 def main(argv=None) -> int:
@@ -135,7 +147,8 @@ def main(argv=None) -> int:
         args.out.mkdir(parents=True, exist_ok=True)
         with closing(open_readonly(args.db)) as conn:
             for make in FIGURES:
-                print(f"wrote {make(conn, args.out)}")
+                path = make(conn, args.out)
+                print(f"wrote {path}" if path else f"skipped {make.__name__}: no data")
     except (FileNotFoundError, sqlite3.Error) as error:
         print(f"figures failed: {error}", file=sys.stderr)
         return 1

@@ -185,7 +185,7 @@ def benchmark_models(conn: sqlite3.Connection) -> list[dict]:
         "seasonal_naive": lambda: [predict_seasonal_naive(f) for f in test_frames.values()],
         "ridge": lambda: [predict_ridge(pipelines[key], f) for key, f in test_frames.items()],
     }
-    mae = dict(conn.execute("SELECT model, AVG(mae) FROM metrics GROUP BY model"))
+    mae = dict(conn.execute("SELECT model, AVG(mae) FROM metrics WHERE parameter = ? GROUP BY model", (TARGET,)))
     rows = []
     for model, action in predictors.items():
         _, seconds, peak = measure(action)

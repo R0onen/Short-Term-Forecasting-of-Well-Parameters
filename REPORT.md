@@ -49,7 +49,7 @@ Primary and foreign keys and CHECK constraints are enforced. The build writes a 
 
 ### 3.3 SQL queries
 
-`wells.analysis.sql_report` runs 12 analytical queries, loads each result into Pandas and saves it as CSV. The SQL text and results are in [reports/sql_queries.md](reports/sql_queries.md). The pipeline additionally ships `gaps.sql` and `aggregates.sql`, which the dashboard uses.
+`wells.analysis.sql_report` runs 14 analytical queries, loads each result into Pandas and saves it as CSV. The SQL text and results are in [reports/sql_queries.md](reports/sql_queries.md). The pipeline additionally ships `gaps.sql` and `aggregates.sql`, which the dashboard uses.
 
 | Query | SQL features | Used for |
 | --- | --- | --- |
@@ -65,6 +65,8 @@ Primary and foreign keys and CHECK constraints are enforced. The build writes a 
 | 10 model wins | CTE, window `RANK` | Method comparison |
 | 11 MAE per well | JOIN, conditional aggregation | Method comparison |
 | 12 MAE by horizon | GROUP BY | Method comparison |
+| 13 pressure MAE per well | JOIN, conditional aggregation | Extension (section 9) |
+| 14 pressure MAE by horizon | GROUP BY | Extension (section 9) |
 
 ## 4. Data quality audit
 
@@ -204,15 +206,43 @@ Cost of each method over all 168 well–horizon groups:
 
 ![Forecast example](reports/figures/forecast_example.png)
 
-## 9. Dashboard
+## 9. Extension: tubing pressure of fountain wells
+
+The mandatory comparison covers only the pump wells. As an extension, the same three methods and the same leakage-free protocol were applied to `tubing_pressure` (atm) of the three fountain wells, so that both well types are forecast. It is switched on with `--targets pump_fillage tubing_pressure`; the default run is unchanged. Predictions are clipped at zero only, because pressure has no upper bound, and the regularization strength is selected separately for this target (0.1).
+
+Mean MAE over the three fountain wells on the official test period, in atm:
+
+| Horizon | Naive | Seasonal naive | Ridge |
+| ---: | ---: | ---: | ---: |
+| 1 h | **0.19** | 0.54 | 0.24 |
+| 3 h | **0.35** | 0.54 | 0.40 |
+| 6 h | **0.53** | 0.55 | 0.56 |
+| 12 h | 0.73 | **0.55** | 0.78 |
+| 18 h | 0.67 | **0.55** | 0.89 |
+| 24 h | **0.55** | **0.55** | 0.96 |
+
+![Pressure MAE by horizon](reports/figures/pressure_mae_by_horizon.png)
+
+| Well | Naive | Seasonal naive | Ridge | Coverage |
+| --- | ---: | ---: | ---: | ---: |
+| NK-75 | 0.48 | **0.27** | 0.37 | 0.90 |
+| NK-76 | 0.22 | 0.18 | **0.15** | 0.94 |
+| NK-83 | **1.05** | 1.19 | 1.66 | 0.92 |
+
+- Here the baselines win. Naive is best for the first six hours and seasonal naive from seven hours on. Ridge is best in only 22 of the 72 well–horizon groups, against 143 of 168 for pump fillage.
+- Ridge is best on NK-76, whose pressure level is the same in train (mean 10.4 atm) and test (10.0 atm).
+- On the other two wells the test period differs from the training period. NK-75 averages 10.4 atm in train, with 921 zero-pressure hours, and 20.8 atm in test with none. NK-83 has 244 zero-pressure hours in the 53 test days against 124 in the 220 training days. A model fitted on the earlier level carries it into the test period, while the baselines follow the current level. The report does not establish the operational cause of these changes.
+- The practical conclusion is that the method has to be chosen per target: a lag regression for pump fillage, a naive or seasonal baseline for tubing pressure unless the model is refitted on recent data.
+
+## 10. Dashboard
 
 `streamlit run app.py -- --db data/processed/wells.sqlite` opens a local read-only dashboard with filters for well type, well, sensor and period. It has five interactive Plotly figures: history with trend, gaps and flags; hour-of-day profile; correlation matrix; coverage heatmap; and forecast against actual values with MAE by horizon. The forecast section switches between the backtest and the latest 24-hour release and lets the user choose the horizon and the methods.
 
-## 10. Reproducibility and testing
+## 11. Reproducibility and testing
 
-The project runs from the README: install `requirements.txt`, build the database, run the forecast, start the dashboard. The automated suite has 53 tests on a synthetic fixture (data pipeline, SQL, forecast boundaries and leakage, dashboard states, analysis scripts) plus an optional end-to-end check on the official data that runs the whole chain twice and compares the results.
+The project runs from the README: install `requirements.txt`, build the database, run the forecast, start the dashboard. The automated suite has 56 tests on a synthetic fixture (data pipeline, SQL, forecast boundaries and leakage, dashboard states, analysis scripts) plus an optional end-to-end check on the official data that runs the whole chain twice and compares the results.
 
-## 11. Limitations
+## 12. Limitations
 
 - The dataset has 258K rows, below the recommended 500K, so the volume techniques are demonstrated and measured but not strictly needed.
 - The source does not state a time zone or the delay with which hourly means become available; the project assumes a value is known when its hour closes.
@@ -221,12 +251,13 @@ The project runs from the README: install `requirements.txt`, build the database
 - NK-7 is trained on about ten weeks of data after its regime change, and it remains the hardest well.
 - The cause of the dynamometer area scale shift is unknown, so that sensor is annotated and not corrected.
 
-## 12. Conclusions
+## 13. Conclusions
 
 - A validated, reproducible SQLite database was built from the published long-format data, with a full audit journal of flags, gaps and the two known dataset problems.
 - Pump fillage behaves very differently across wells, and its daily pattern is weak.
 - A simple lag regression beats both baselines on six of seven wells and at every horizon on average, reducing MAE from 11.99 (naive) to 10.12 percentage points, at a negligible computing cost.
 - Where a well is stable, the naive forecast is equally good, which the report states rather than hides.
+- The extension to fountain-well tubing pressure shows the opposite ranking: the baselines beat the regression where the test period differs from the training period.
 
 ## References
 

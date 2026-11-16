@@ -12,6 +12,8 @@ LAG_COLUMNS = [f"lag_{k}" for k in LAGS]
 CALENDAR_COLUMNS = ["target_hour_sin", "target_hour_cos"]
 RIDGE_FEATURES = LAG_COLUMNS + CALENDAR_COLUMNS
 CLIP_RANGE = (0.0, 100.0)
+# Supported targets and their valid value range (None = unbounded above).
+TARGET_RANGES = {TARGET: CLIP_RANGE, "tubing_pressure": (0.0, None)}
 REGIME_WELL = "NK-7"
 FRAME_COLUMNS = ["origin_ts", "target_ts", "horizon_h", "y_true", "seasonal_value"] + RIDGE_FEATURES
 
@@ -24,7 +26,7 @@ def _hours(n: int) -> pd.Timedelta:
     return pd.Timedelta(hours=n)
 
 
-def build_features(series: pd.Series, horizon_h: int) -> pd.DataFrame:
+def build_features(series: pd.Series, horizon_h: int, value_range=CLIP_RANGE) -> pd.DataFrame:
     """Return one row per origin hour `t` with the target at `t + horizon_h`.
 
     Predictors only read hours at or before the origin. Missing hours stay
@@ -43,8 +45,9 @@ def build_features(series: pd.Series, horizon_h: int) -> pd.DataFrame:
     if (s.index != s.index.floor("h")).any():
         raise ValueError("series timestamps must be exact hours")
     known = s.dropna()
-    if ((known < CLIP_RANGE[0]) | (known > CLIP_RANGE[1])).any():
-        raise ValueError("usable target values must lie in [0, 100]")
+    low, high = value_range
+    if (known < low).any() or (high is not None and (known > high).any()):
+        raise ValueError(f"usable target values must lie in [{low}, {'inf' if high is None else high}]")
 
     origin = pd.date_range(s.index[0], s.index[-1], freq="h")
     target = origin + _hours(horizon_h)

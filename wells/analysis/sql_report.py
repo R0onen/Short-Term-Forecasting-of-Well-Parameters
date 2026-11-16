@@ -165,7 +165,7 @@ QUERIES: dict[str, tuple[str, str, str]] = {
             SELECT well_id, horizon_h, model, mae,
                    RANK() OVER (PARTITION BY well_id, horizon_h ORDER BY mae) AS place
             FROM metrics
-            WHERE mae IS NOT NULL
+            WHERE mae IS NOT NULL AND parameter = 'pump_fillage'
         )
         SELECT model, COUNT(*) AS groups_won, ROUND(AVG(mae), 3) AS mean_mae_when_best
         FROM ranked
@@ -185,6 +185,7 @@ QUERIES: dict[str, tuple[str, str, str]] = {
                ROUND(AVG(m.coverage), 3) AS mean_coverage
         FROM metrics AS m
         JOIN series_catalog AS c ON c.well_id = m.well_id AND c.parameter = m.parameter
+        WHERE m.parameter = 'pump_fillage'
         GROUP BY m.well_id, c.well_type
         ORDER BY mae_ridge
         """,
@@ -199,6 +200,38 @@ QUERIES: dict[str, tuple[str, str, str]] = {
                ROUND(AVG(CASE WHEN model = 'ridge' THEN mae END), 3) AS mae_ridge,
                SUM(CASE WHEN model = 'ridge' THEN n_common END) AS n_common
         FROM metrics
+        WHERE parameter = 'pump_fillage'
+        GROUP BY horizon_h
+        ORDER BY horizon_h
+        """,
+    ),
+    "13_pressure_mae_per_well": (
+        "Extension: tubing_pressure MAE per fountain well and method (empty unless the pressure target was run).",
+        "JOIN, conditional aggregation",
+        """
+        SELECT m.well_id, c.unit,
+               ROUND(AVG(CASE WHEN m.model = 'naive' THEN m.mae END), 3) AS mae_naive,
+               ROUND(AVG(CASE WHEN m.model = 'seasonal_naive' THEN m.mae END), 3) AS mae_seasonal_naive,
+               ROUND(AVG(CASE WHEN m.model = 'ridge' THEN m.mae END), 3) AS mae_ridge,
+               ROUND(AVG(m.coverage), 3) AS mean_coverage
+        FROM metrics AS m
+        JOIN series_catalog AS c ON c.well_id = m.well_id AND c.parameter = m.parameter
+        WHERE m.parameter = 'tubing_pressure'
+        GROUP BY m.well_id, c.unit
+        ORDER BY m.well_id
+        """,
+    ),
+    "14_pressure_mae_by_horizon": (
+        "Extension: mean tubing_pressure MAE across fountain wells for every horizon and method.",
+        "GROUP BY, conditional aggregation",
+        """
+        SELECT horizon_h,
+               ROUND(AVG(CASE WHEN model = 'naive' THEN mae END), 3) AS mae_naive,
+               ROUND(AVG(CASE WHEN model = 'seasonal_naive' THEN mae END), 3) AS mae_seasonal_naive,
+               ROUND(AVG(CASE WHEN model = 'ridge' THEN mae END), 3) AS mae_ridge,
+               SUM(CASE WHEN model = 'ridge' THEN n_common END) AS n_common
+        FROM metrics
+        WHERE parameter = 'tubing_pressure'
         GROUP BY horizon_h
         ORDER BY horizon_h
         """,

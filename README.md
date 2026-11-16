@@ -107,6 +107,15 @@ python -m wells.forecast.run --db data/processed/wells.sqlite |
 
 Первая команда только читает БД и проверяет границы обучения на NK-7. Вторая заполняет таблицы `backtest_predictions`, `metrics` и `forecast_path` в одной транзакции и печатает JSON-отчёт о запуске.
 
+
+### Расширение: прогноз давления фонтанных скважин
+
+```powershell
+python -m wells.forecast.run --db data/processed/wells.sqlite --targets pump_fillage tubing_pressure
+```
+
+С флагом `--targets` те же три метода дополнительно применяются к `tubing_pressure` трёх фонтанных скважин. Запуск без флага рассчитывает только `pump_fillage` и удаляет строки расширения. Дашборд пока показывает прогноз только для `pump_fillage`; результаты по давлению доступны в таблицах `metrics`, `backtest_predictions`, `forecast_path` и в разделе 9 отчёта.
+
 ## Дашборд
 
 ```powershell
@@ -123,7 +132,7 @@ python -m wells.analysis.benchmark --raw-dir data/raw --db data/processed/wells.
 python -m wells.analysis.figures --db data/processed/wells.sqlite --out reports/figures
 ```
 
-- `sql_report` выполняет 12 аналитических запросов (JOIN, GROUP BY/HAVING, CTE, подзапросы, оконные функции `LAG` и `RANK`), загружает результаты в Pandas и сохраняет их в `reports/sql/*.csv` и [reports/sql_queries.md](reports/sql_queries.md).
+- `sql_report` выполняет 14 аналитических запросов (JOIN, GROUP BY/HAVING, CTE, подзапросы, оконные функции `LAG` и `RANK`), загружает результаты в Pandas и сохраняет их в `reports/sql/*.csv` и [reports/sql_queries.md](reports/sql_queries.md).
 - `benchmark` измеряет время и память: CSV с типами по умолчанию, оптимизированные типы, чтение по частям (`chunksize`), Parquet, Pandas против SQL и три метода прогноза. Результат — [reports/benchmarks.md](reports/benchmarks.md) и `reports/benchmarks.json`.
 - `figures` строит графики для отчёта в `reports/figures/`.
 
