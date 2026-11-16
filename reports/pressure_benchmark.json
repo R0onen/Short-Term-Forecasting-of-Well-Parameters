@@ -1,0 +1,63 @@
+{
+  "dataset": "Petrobras 3W",
+  "revision": "c86cc7c70063646910be7292de8a54a6fb2a8399",
+  "license": "CC BY 4.0",
+  "variable": "P-TPT",
+  "unit": "Pa",
+  "rows": 500000,
+  "wells": 3,
+  "start_timestamp": "2017-02-01 01:02:07",
+  "end_timestamp": "2018-10-29 22:06:41",
+  "sources": [
+    {
+      "path": "dataset/0/WELL-00001_20170201010207.parquet",
+      "sha256": "1df6fd74bc3b943570a70ffa075f53ca5b50d606eadea600acca977fc633146e",
+      "rows": 21474
+    },
+    {
+      "path": "dataset/0/WELL-00019_20170307235203.parquet",
+      "sha256": "5e44eb169fcf5007214f5f522d0f13c09317ff67c2340ca4f8145c2223163a41",
+      "rows": 143231
+    },
+    {
+      "path": "dataset/7/WELL-00022_20181026005827.parquet",
+      "sha256": "ac1c04f5fd9d4e40d3b6c20544a30b21ea578acbe1b8369eba2875319914cbaf",
+      "rows": 335295
+    }
+  ],
+  "by_well": [
+    {
+      "well_id": "WELL-00001",
+      "rows": 21474,
+      "mean_pa": 10059071.437645525,
+      "min_pa": 9994737.0,
+      "max_pa": 10114430.0
+    },
+    {
+      "well_id": "WELL-00019",
+      "rows": 143231,
+      "mean_pa": 12034380.472481515,
+      "min_pa": 1444328.0,
+      "max_pa": 18964050.0
+    },
+    {
+      "well_id": "WELL-00022",
+      "rows": 335295,
+      "mean_pa": 9196077.313535841,
+      "min_pa": 9080380.0,
+      "max_pa": 9305608.0
+    }
+  ],
+  "timings": [
+    {
+      "approach": "SQLite GROUP BY",
+      "seconds": 0.10776029999942693,
+      "python_peak_mib": 0.014068603515625
+    },
+    {
+      "approach": "Read SQLite rows and group with Pandas",
+      "seconds": 1.3966575999993438,
+      "python_peak_mib": 97.91425037384033
+    }
+  ]
+}

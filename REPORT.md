@@ -23,7 +23,7 @@ Source: NK Oil Well Sensor Monitoring v2 on Hugging Face, pinned to revision `40
 
 Fountain wells report tubing, line and casing pressure (atm). Pump wells report strokes per minute (SPM), pump fillage (%), minimum and maximum rod weight (kg) and dynamometer card area.
 
-The dataset is below the recommended 500K rows, so memory is not a practical limit here. The loading approaches required for larger data are still implemented and measured in section 5.
+The NK forecasting dataset contains 258,387 rows. The data engineering benchmarks also use a separate 500,000-row pressure dataset from Petrobras 3W, described in section 5.
 
 ## 3. Pipeline and database
 
@@ -95,6 +95,14 @@ Every rejected or masked record has a row in `quality_issues` with a reason code
 ![NK-7 regime change](reports/figures/nk7_regime.png)
 
 ## 5. Handling data volume: measurements
+
+### 5.1 External pressure benchmark
+
+`python -m wells.analysis.pressure_benchmark` builds a SQLite database with 500,000 unique well–timestamp values of `P-TPT` (subsea tree pressure in Pa) from three real-well Petrobras 3W files. The source revision and file SHA-256 hashes are pinned. The loader drops missing and non-finite values, retains one row per well and timestamp, and records the source file of each value. The final sample is a deterministic prefix sorted by well and timestamp. [Source and CC BY 4.0 license](https://github.com/petrobras/3W/blob/c86cc7c70063646910be7292de8a54a6fb2a8399/dataset/README.md).
+
+The publisher resampled the telemetry to 1 Hz using linear interpolation. SQLite and Pandas return the same counts, minima, maxima and means per well within floating-point tolerance. The [benchmark result](reports/pressure_benchmark.json) records the retained counts, verified source hashes, query timings and Python peak allocations. Petrobras provides the data volume for this engineering benchmark. The NK forecast uses the official hourly series and its published chronological split. [Sampling methodology](https://arxiv.org/html/2507.01048v1#S2.SS5).
+
+### 5.2 Original NK dataset
 
 `wells.analysis.benchmark` measures time and memory of each approach on the full 258,387 rows. One run on the development machine:
 
@@ -244,7 +252,7 @@ The project runs from the README: install `requirements.txt`, build the database
 
 ## 12. Limitations
 
-- The dataset has 258K rows, below the recommended 500K, so the volume techniques are demonstrated and measured but not strictly needed.
+- NK forecast evaluation covers 258,387 published hourly sensor rows. The 500,000-row volume benchmark covers 1 Hz pressure telemetry from three wells in a separate field and supports conclusions about data processing performance.
 - The source does not state a time zone or the delay with which hourly means become available; the project assumes a value is known when its hour closes.
 - MAE is computed only on hours where all inputs exist. On wells with many gaps the result describes 82–85% of the test hours.
 - Ridge is linear and uses only the target's own history. Other sensors and non-linear models were left out of scope.

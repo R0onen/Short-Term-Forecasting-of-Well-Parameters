@@ -19,7 +19,7 @@ python -m wells.data.pipeline --raw-dir data/raw --db data/processed/wells.sqlit
 
 ### Подключение прогноза и интерфейса
 
-После появления модулей Студентов 2 и 3 выполните команды в указанном порядке на той же БД.
+После сборки данных выполните команды в указанном порядке на той же БД.
 
 ```powershell
 python -m wells.forecast.run --db data/processed/wells.sqlite --diagnostic
@@ -28,7 +28,7 @@ python -m wells.forecast.run --db data/processed/wells.sqlite |
 streamlit run app.py -- --db data/processed/wells.sqlite
 ```
 
-Для автономной проверки чтения используйте `tests/fixtures/seed.sql` после `schema.sql` с включёнными внешними ключами. Фикстура содержит демонстрационные строки метрик и прогноза. Сквозные тесты подключают реальные `wells.forecast.run` и `wells.ui.queries` через [согласованные интерфейсы](INTERFACES.md#module-interfaces). Пока модулей нет, pytest показывает причину пропуска. Для подключения участники добавляют свои реализации в принадлежащие им модули.
+Для автономной проверки чтения используйте `tests/fixtures/seed.sql` после `schema.sql` с включёнными внешними ключами. Фикстура содержит демонстрационные строки метрик и прогноза. Сквозные тесты подключают `wells.forecast.run` и `wells.ui.queries` через [согласованные интерфейсы](INTERFACES.md#module-interfaces).
 
 ## Проверки
 
@@ -138,6 +138,16 @@ python -m wells.analysis.figures --db data/processed/wells.sqlite --out reports/
 
 ER-диаграмма схемы находится в [docs/ER.md](docs/ER.md). Письменный отчёт — [REPORT.md](REPORT.md).
 
+## Бенчмарк на 500 000 записей давления
+
+```powershell
+python -m wells.analysis.pressure_benchmark
+```
+
+Команда скачивает три файла Parquet из закреплённой ревизии Petrobras 3W, проверяет SHA-256 и собирает `data/processed/petrobras-pressure.sqlite`. В таблице `pressure_observations` ровно **500 000** конечных значений `P-TPT` (давление на подводной фонтанной арматуре, Па) с уникальными ключами «скважина–метка времени». При совпадении ключей сохраняется первая запись в порядке манифеста. Излишек отсекается по ключу в порядке «скважина, метка времени». Команда сравнивает количество, среднее, минимум и максимум по скважине через SQLite и Pandas и выводит JSON с замерами. [Результат проверки](reports/pressure_benchmark.json).
+
+Файлы `WELL-*` содержат опубликованные ряды трёх реальных скважин Petrobras. Издатель привёл телеметрию к частоте 1 Гц линейной интерполяцией. Почасовой прогноз и его метрики рассчитываются на официальных 258 387 строках NK. Petrobras 3W используется для отдельной проверки производительности. [Источник Petrobras 3W и лицензия CC BY 4.0](https://github.com/petrobras/3W/blob/c86cc7c70063646910be7292de8a54a6fb2a8399/dataset/README.md), [методика подготовки рядов](https://arxiv.org/html/2507.01048v1#S2.SS5).
+
 ## Структура проекта
 
 | Путь | Назначение |
@@ -145,6 +155,6 @@ ER-диаграмма схемы находится в [docs/ER.md](docs/ER.md).
 | `wells/data/` | Загрузка CSV, проверка и аудит качества, pivot long → wide, сборка SQLite, SQL для пропусков и агрегатов |
 | `wells/forecast/` | Признаки, baseline-методы, Ridge, оценка на тесте, публикация результатов |
 | `wells/ui/`, `app.py` | Чтение SQLite, EDA, графики Plotly и приложение Streamlit |
-| `wells/analysis/` | Набор SQL-запросов, замеры времени и памяти, графики отчёта |
+| `wells/analysis/` | SQL-запросы, замеры времени и памяти на NK и Petrobras 3W, графики отчёта |
 | `tests/` | Тесты данных, прогноза, интерфейса и сквозной сборки |
 | `reports/` | Сохранённые результаты запросов, замеров и графики |
