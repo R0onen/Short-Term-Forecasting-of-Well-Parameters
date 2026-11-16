@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from wells.analysis import sql_report
+from wells.analysis import figures, sql_report
 from wells.analysis.benchmark import measure
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -44,6 +44,22 @@ def test_missing_database_is_reported(tmp_path, capsys):
     assert sql_report.main(["--db", str(missing), "--out", str(tmp_path)]) == 1
     assert not missing.exists()
     assert "database not found" in capsys.readouterr().err
+
+
+def test_pressure_figure_is_removed_when_pressure_results_are_missing(db, tmp_path):
+    with closing(sqlite3.connect(db)) as conn, conn:
+        conn.executemany(
+            "INSERT INTO metrics VALUES ('NK-76', 'tubing_pressure', 1, ?, 1.0, 1, 2, 0.5)",
+            [(model,) for model in ("naive", "seasonal_naive", "ridge")],
+        )
+        pump_figure = figures.mae_by_horizon(conn, tmp_path)
+        pressure_figure = figures.pressure_mae_by_horizon(conn, tmp_path)
+        assert pressure_figure.is_file()
+
+        conn.execute("DELETE FROM metrics WHERE parameter = 'tubing_pressure'")
+        assert figures.pressure_mae_by_horizon(conn, tmp_path) is None
+        assert not pressure_figure.exists()
+        assert pump_figure.is_file()
 
 
 def test_measure_returns_result_time_and_memory():

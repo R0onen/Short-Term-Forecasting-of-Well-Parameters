@@ -111,7 +111,7 @@ def test_official_repeat_with_consumers(tmp_path):
     reports = []
     for path in paths:
         pipeline.build_database(raw_dir, path)
-        reports.append(forecast.run_forecast(path))
+        reports.append(forecast.run_forecast(path, targets=["pump_fillage", "tubing_pressure"]))
     _assert_same_report(*reports)
     with closing(ui.open_database(paths[0])) as first, closing(ui.open_database(paths[1])) as second:
         _assert_same_tables(first, second, (*DATA_TABLES, *RESULT_TABLES))
@@ -125,5 +125,9 @@ def test_official_repeat_with_consumers(tmp_path):
         assert pressure["n_expected"].sum() == 1273 and pressure["n_observed"].sum() == 0
         target = dict(well_id="NK-91", parameter="pump_fillage", models=MODELS)
         assert len(ui.read_metrics(first, **target)) == len(ui.read_forecast_path(first, **target)) == 72
-        assert reports[0]["table_counts"]["metrics"] == 504
+        assert reports[0]["table_counts"]["metrics"] == 720
         assert reports[0]["release_origins"]["NK-91"] == "2026-09-29 09:00:00"
+        pressure_target = dict(well_id="NK-76", parameter="tubing_pressure", models=MODELS)
+        assert len(ui.read_metrics(first, **pressure_target)) == 72
+        assert len(ui.read_forecast_path(first, **pressure_target)) == 72
+        assert reports[0]["extra_targets"]["tubing_pressure"]["release_origins"]["NK-76"] == meta["test_end"]

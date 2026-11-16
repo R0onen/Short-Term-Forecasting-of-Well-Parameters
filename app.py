@@ -17,9 +17,8 @@ from wells.ui import charts, eda, queries
 
 DEFAULT_DB = Path("data/processed/wells.sqlite")
 BUILD_COMMAND = "python -m wells.data.pipeline --raw-dir data/raw --db {db}"
-FORECAST_COMMAND = "python -m wells.forecast.run --db {db}"
-FORECAST_TARGET = "pump_fillage"
-FORECAST_TYPE = "sucker_rod_pump"
+FORECAST_COMMAND = 'python -m wells.forecast.run --db "{db}" --targets pump_fillage tubing_pressure'
+FORECAST_TARGETS = {"sucker_rod_pump": "pump_fillage", "fountain": "tubing_pressure"}
 TYPE_LABELS = {"fountain": "Фонтанная (fountain)", "sucker_rod_pump": "Насосная ШГН (sucker_rod_pump)"}
 MODE_LABELS = {"raw": "Исходные (до маски)", "clean": "Очищенные (по маске качества)"}
 GRAIN_LABELS = {"day": "День", "month": "Месяц"}
@@ -45,11 +44,24 @@ def _keep_valid(key, options, default):
         st.session_state[key] = default if default in options else options[0]
 
 
-def _clamp_dates(first, last):
-    stored = st.session_state.get("dates")
-    if not (isinstance(stored, (tuple, list)) and len(stored) == 2
-            and first <= stored[0] <= last and first <= stored[1] <= last and stored[0] <= stored[1]):
-        st.session_state["dates"] = (max(first, last - timedelta(days=DEFAULT_DAYS - 1)), last)
+def _date_period(first, last):
+    complete = st.session_state.get("complete_dates")
+    if complete is None or not first <= complete[0] <= complete[1] <= last:
+        complete = (max(first, last - timedelta(days=DEFAULT_DAYS - 1)), last)
+
+    draft = st.session_state.get("dates")
+    if (not isinstance(draft, (tuple, list)) or len(draft) > 2
+            or any(not first <= day <= last for day in draft)
+            or (len(draft) == 2 and draft[0] > draft[1])):
+        st.session_state["dates"] = complete
+
+    picked = st.sidebar.date_input("Период (обе даты включительно)", key="dates", min_value=first, max_value=last)
+    if len(picked) == 2:
+        complete = picked
+    else:
+        st.sidebar.caption("Выберите обе даты. Пока используется предыдущий период.")
+    st.session_state["complete_dates"] = complete
+    return complete
 
 
 def jump_to(*, well_type, well_id, parameter, start, end):
@@ -63,7 +75,7 @@ def render_filters(catalog, meta) -> dict:
     sidebar = st.sidebar
     sidebar.header("Фильтры")
     types = sorted(catalog["well_type"].unique())
-    _keep_valid("well_type", types, FORECAST_TYPE)
+    _keep_valid("well_type", types, "sucker_rod_pump")
     well_type = sidebar.selectbox("Тип скважины", types, key="well_type", format_func=lambda v: TYPE_LABELS.get(v, v))
 
     of_type = catalog.loc[catalog["well_type"].eq(well_type)]
@@ -73,18 +85,13 @@ def render_filters(catalog, meta) -> dict:
 
     of_well = of_type.loc[of_type["well_id"].eq(well_id)]
     parameters = sorted(of_well["parameter"])
-    _keep_valid("parameter", parameters, FORECAST_TARGET if well_type == FORECAST_TYPE else "tubing_pressure")
+    _keep_valid("parameter", parameters, FORECAST_TARGETS.get(well_type))
     parameter = sidebar.selectbox("Параметр", parameters, key="parameter")
     unit = of_well.set_index("parameter").loc[parameter, "unit"]
 
     first = pd.Timestamp(meta["train_start"]).date()
     last = pd.Timestamp(meta["test_end"]).date()
-    _clamp_dates(first, last)
-    picked = sidebar.date_input("Период (обе даты включительно)", key="dates", min_value=first, max_value=last)
-    start_date, end_date = (picked if isinstance(picked, (tuple, list)) and len(picked) == 2
-                            else st.session_state["dates"])
-    if len(picked) != 2:
-        sidebar.caption("Выберите вторую дату. Пока используется предыдущий период.")
+    start_date, end_date = _date_period(first, last)
 
     same = catalog.loc[catalog["parameter"].eq(parameter) & catalog["unit"].eq(unit)]
     others = sorted(set(same["well_id"]) - {well_id}, key=lambda name: (len(name), name))
@@ -283,8 +290,9 @@ def render_quality(conn, catalog, meta, selection) -> None:
     metric[3].metric("Пригодно", f"{usable:,}".replace(",", " "))
 
     issues = queries.read_issues(conn, well_id=selection["well_id"], parameter=None, **window)
-    placed = issues.loc[issues["timestamp"].notna()]
-    unplaced = issues.loc[issues["timestamp"].isna()]
+    located = issues["timestamp"].notna() & issues["well_id"].notna()
+    placed = issues.loc[located]
+    unplaced = issues.loc[~located]
     st.markdown(f"**Журнал качества {selection['well_id']}** — все параметры, пересечение с выбранным периодом")
     if not placed.empty:
         st.dataframe(placed.groupby(["parameter", "issue_code", "action"], dropna=False).size()
@@ -292,7 +300,7 @@ def render_quality(conn, catalog, meta, selection) -> None:
     st.caption("Время записи — начало часа; проблема часа закрывается через час. raw_* — исходные поля CSV.")
     st.dataframe(placed, hide_index=True, width="stretch")
     if not unplaced.empty:
-        st.markdown("**Отвергнутые записи без нормализованного часа**")
+        st.markdown("**Отвергнутые записи без нормализованного часа или известной скважины**")
         st.dataframe(unplaced, hide_index=True, width="stretch")
 
 
@@ -308,13 +316,16 @@ def _metric_table(metrics):
 
 def render_forecast(conn, catalog, meta, selection) -> None:
     st.subheader("Прогноз и оценка")
-    db = st.session_state.get("db_path", DEFAULT_DB)
-    if selection["parameter"] != FORECAST_TARGET or selection["well_type"] != FORECAST_TYPE:
-        st.info(f"Прогноз рассчитан для {FORECAST_TARGET} семи насосных скважин. Для "
-                f"{selection['well_id']} {selection['parameter']} доступны история и аудит на других вкладках.")
+    if selection["parameter"] != FORECAST_TARGETS.get(selection["well_type"]):
+        st.info(f"Для {selection['well_id']} {selection['parameter']} доступны история и аудит. "
+                "Прогноз поддерживает pump_fillage насосных и tubing_pressure фонтанных скважин.")
         return
-    if sum(queries.read_result_counts(conn).values()) == 0:
-        st.warning("Прогнозы ещё не рассчитаны. Выполните полный прогон на этой БД:")
+    target = dict(well_id=selection["well_id"], parameter=selection["parameter"])
+    published_metrics = queries.read_metrics(conn, models=queries.MODELS, **target)
+    if published_metrics.empty:
+        db = st.session_state.get("db_path", DEFAULT_DB)
+        st.warning(f"Прогнозы ещё не рассчитаны для {target['well_id']} {target['parameter']}. "
+                   "Выполните полный прогон на этой БД:")
         st.code(FORECAST_COMMAND.format(db=db), language="bash")
         return
 
@@ -324,8 +335,10 @@ def render_forecast(conn, catalog, meta, selection) -> None:
     models = controls[1].multiselect("Модели", queries.MODELS, default=list(queries.MODELS), key="models",
                                      format_func=charts.MODEL_LABELS.get)
     horizon = controls[2].slider("Горизонт, ч", 1, 24, 1, key="horizon", disabled=mode != "backtest")
-    target = dict(well_id=selection["well_id"], parameter=selection["parameter"])
-    metrics = queries.read_metrics(conn, models=models, **target)
+    if not models:
+        st.info("Выберите хотя бы одну модель.")
+        return
+    metrics = published_metrics.loc[published_metrics["model"].isin(models)]
     test_start, test_end = pd.Timestamp(meta["test_start"]), pd.Timestamp(meta["test_end"])
     archive_end = test_end
 
@@ -361,10 +374,12 @@ def render_forecast(conn, catalog, meta, selection) -> None:
 
     st.plotly_chart(charts.forecast_figure(actuals, predictions, metrics, mode=mode, origin_ts=origin,
                                            archive_end=archive_end, test_start=test_start, test_end=test_end,
-                                           horizon_h=horizon if mode == "backtest" else None),
+                                           horizon_h=horizon if mode == "backtest" else None, unit=selection["unit"]),
                     use_container_width=True, key="forecast_chart")
+    mae_unit = "процентных пунктах" if selection["unit"] == "%" else selection["unit"]
     st.markdown(f"**Метрики официального test** ({_label(test_start)} — {_label(test_end)}), не зависят от фильтра дат. "
-                "MAE в процентных пунктах; n_common — общие точки всех трёх методов; coverage = n_common / n_actual.")
+                f"MAE в {mae_unit}. n_common — общие точки всех трёх методов. "
+                "Покрытие — доля этих точек среди пригодных наблюдений цели на test.")
     shown = metrics if mode == "release" else metrics.loc[metrics["horizon_h"].eq(horizon)]
     st.dataframe(_metric_table(shown), hide_index=True, width="stretch", column_config={
         "coverage": st.column_config.NumberColumn("coverage", format="percent")})

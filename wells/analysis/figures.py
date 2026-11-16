@@ -37,9 +37,10 @@ def _save(fig, out_dir: Path, name: str) -> Path:
     return path
 
 
-def _horizon_chart(conn, out_dir: Path, query: str, ylabel: str, title: str, name: str):
+def _horizon_chart(conn, out_dir: Path, query: str, ylabel: str, title: str, name: str) -> Path | None:
     data = pd.read_sql_query(QUERIES[query][2], conn)
-    if data.empty:  # the optional target was not run
+    if data.empty:
+        (out_dir / name).unlink(missing_ok=True)
         return None
     fig, ax = plt.subplots(figsize=(8, 4.5))
     for model, (label, color) in MODEL_STYLE.items():

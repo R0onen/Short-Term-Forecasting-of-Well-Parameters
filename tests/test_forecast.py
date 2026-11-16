@@ -258,6 +258,40 @@ def _results(db):
     return [query(db, f"SELECT * FROM {t} ORDER BY 1,2,3,4,5") for t in run_module.RESULT_TABLES]
 
 
+@pytest.mark.parametrize("include_pressure", [False, True])
+def test_run_publishes_backtest_when_no_latest_release_exists(db, include_pressure):
+    assert query(db, "SELECT count(*) FROM forecast_path") == [(72,)]
+    # Keep test facts and scoreable forecasts, but break every eligible 25-hour window.
+    conn = sqlite3.connect(db)
+    try:
+        with conn:
+            conn.execute("""
+                UPDATE measurements_wide SET pump_fillage = NULL
+                WHERE well_id = 'NK-7' AND timestamp IN (
+                    '2026-01-07 23:00:00', '2026-01-09 00:00:00', '2026-01-10 01:00:00'
+                )
+            """)
+    finally:
+        conn.close()
+
+    targets = ["pump_fillage"]
+    if include_pressure:
+        _with_pressure(db)
+        targets.append("tubing_pressure")
+    report = run_forecast(db, targets=targets, **DATES)
+
+    assert report["release_origins"] == {"NK-7": None}
+    assert report["table_counts"]["forecast_path"] == (72 if include_pressure else 0)
+    assert report["table_counts"]["metrics"] == 72 * len(targets)
+    assert report["table_counts"]["backtest_predictions"] > 0
+    assert query(db, "SELECT count(*) FROM forecast_path WHERE parameter = 'pump_fillage'") == [(0,)]
+    assert query(db, "SELECT DISTINCT n_actual FROM metrics WHERE parameter = 'pump_fillage'") == [(70,)]
+    assert query(db, "SELECT count(*) FROM metrics WHERE parameter = 'pump_fillage' AND mae IS NOT NULL")[0][0] > 0
+    if include_pressure:
+        assert report["extra_targets"]["tubing_pressure"]["release_origins"] == {"NK-76": TEST_END}
+        assert query(db, "SELECT count(*) FROM forecast_path WHERE parameter = 'tubing_pressure'") == [(72,)]
+
+
 def test_failed_write_keeps_previous_results(db, monkeypatch):
     before = _results(db)
     real = run_module._records

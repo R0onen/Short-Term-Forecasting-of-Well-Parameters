@@ -167,6 +167,22 @@ def test_issue_annotations_overlap_and_unplaced_rejects(db_copy):
         assert len(queries.read_annotations(opened)) == 1
 
 
+def test_issue_with_timestamp_and_unknown_well_remains_visible(db_copy, monkeypatch):
+    _edit(db_copy,
+          "UPDATE measurements_raw SET well_id = 'UNKNOWN-1' WHERE source_file = 'train.csv' AND source_row = 1",
+          "INSERT INTO quality_issues (well_id, parameter, timestamp, source_file, source_row, issue_code, action) "
+          "VALUES (NULL, 'SPM', '2026-01-01 01:00:00', 'train.csv', 1, 'unknown_well', 'reject')")
+    with closing(queries.open_database(db_copy)) as opened:
+        issues = queries.read_issues(opened, well_id="NK-7", parameter="SPM", **DAY)
+        unknown = issues.loc[issues["issue_code"].eq("unknown_well")].iloc[0]
+        assert pd.isna(unknown["well_id"]) and unknown["raw_well_id"] == "UNKNOWN-1"
+        outside = queries.read_issues(opened, well_id="NK-7", parameter="SPM",
+                                      start_ts="2026-01-02 00:00:00", end_ts="2026-01-03 00:00:00")
+        assert outside.empty
+    app = _app(db_copy, monkeypatch)
+    assert "без нормализованного часа или известной скважины" in _texts(app, "markdown")
+
+
 def test_forecast_reads_use_shared_keys(conn):
     target = dict(well_id="NK-7", parameter="pump_fillage")
     metrics = queries.read_metrics(conn, models=MODELS, **target)
@@ -339,8 +355,45 @@ def test_app_filters_follow_catalog(seeded_path, monkeypatch):
     app.selectbox(key="well_type").set_value("fountain").run()
     assert app.selectbox(key="well_id").value == "NK-76"
     assert app.selectbox(key="parameter").options == ["line_pressure", "tubing_pressure"]
-    assert "pump_fillage" in _texts(app, "info")  # forecast scope explained, history still shown
+    assert "Прогнозы ещё не рассчитаны для NK-76 tubing_pressure" in _texts(app, "warning")
+    assert "--targets pump_fillage tubing_pressure" in _texts(app, "code")
     assert len(app.get("plotly_chart")) >= 5
+
+
+def test_app_partial_date_range_preserves_last_complete_selection(seeded_path, monkeypatch):
+    app = _app(seeded_path, monkeypatch)
+    days = [pd.Timestamp(f"2026-01-0{day}").date() for day in (3, 4, 5, 6)]
+    app.date_input(key="dates").set_value((days[0], days[1])).run()
+    app.date_input(key="dates").set_value((days[2],)).run()
+    assert not app.exception
+    assert app.date_input(key="dates").value == (days[2],)
+    assert app.session_state["complete_dates"] == (days[0], days[1])
+    assert "Пока используется предыдущий период" in _texts(app, "caption")
+    app.date_input(key="dates").set_value((days[2], days[3])).run()
+    assert app.session_state["complete_dates"] == (days[2], days[3])
+    assert "Пока используется предыдущий период" not in _texts(app, "caption")
+
+
+def test_app_pressure_forecasts_and_model_selection(db_copy, monkeypatch):
+    _edit(db_copy,
+          "INSERT INTO metrics VALUES ('NK-76', 'tubing_pressure', 1, 'naive', 0.25, 1, 1, 1.0)",
+          "INSERT INTO backtest_predictions VALUES "
+          "('NK-76', 'tubing_pressure', '2026-01-07 23:00:00', 1, 'naive', '2026-01-08 00:00:00', 7.0, 7.25)",
+          "INSERT INTO forecast_path VALUES "
+          "('NK-76', 'tubing_pressure', '2026-01-10 23:00:00', 1, 'naive', '2026-01-11 00:00:00', 7.25)")
+    app = _app(db_copy, monkeypatch)
+    app.selectbox(key="well_type").set_value("fountain").run()
+    assert not app.exception and app.selectbox(key="parameter").value == "tubing_pressure"
+    assert "MAE в atm" in _texts(app, "markdown")
+    assert any("MAE, atm" in chart.proto.spec for chart in app.get("plotly_chart"))
+    app.multiselect(key="models").set_value([]).run()
+    assert "Выберите хотя бы одну модель" in _texts(app, "info")
+    assert "нет опубликованных метрик" not in _texts(app, "warning")
+    app.radio(key="forecast_mode").set_value("release").run()
+    assert "Выберите хотя бы одну модель" in _texts(app, "info")
+    assert "Нет полного окна" not in _texts(app, "warning")
+    app.multiselect(key="models").set_value(["naive"]).run()
+    assert "давность 0 ч" in _texts(app, "info") and "MAE в atm" in _texts(app, "markdown")
 
 
 def test_app_empty_slice_keeps_selection_and_official_mae(seeded_path, monkeypatch):

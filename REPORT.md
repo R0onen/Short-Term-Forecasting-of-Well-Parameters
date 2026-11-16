@@ -142,11 +142,11 @@ Descriptive statistics of usable hourly values:
 
 - **Pump fillage differs strongly between wells.** Mean fillage ranges from about 20% (NK-93, NK-82, NK-86) to 81% (NK-91). The low-fillage wells spend 31–35% of their hours below half of their own average, so their series are much more volatile.
 - **Correlations (Spearman, hours where both sensors are present).** In fountain well NK-83 the three pressures move together (0.48 to 0.68). In pump well NK-68 fillage is negatively related to maximum rod weight (−0.49) and dynamometer area (−0.43), and only weakly to SPM (−0.26).
-- **Daily pattern.** The hour-of-day profile of both main sensors is weak (figure below). This matches the forecast result: the seasonal baseline that repeats the value from 24 hours earlier is the weakest method.
+- **Daily pattern.** The hour-of-day profile of both main sensors is weak (figure below). Seasonal naive has the highest aggregate MAE for pump fillage and the lowest aggregate MAE for tubing pressure.
 
 ![Daily profile](reports/figures/daily_profile.png)
 
-The dashboard shows the same analysis interactively for any well, sensor and period: history with gaps and flags, hour-of-day profile with quartiles, correlation matrix, coverage heatmap and forecasts.
+The dashboard shows history with gaps and flags, hour-of-day profiles with quartiles, correlation matrices and coverage heatmaps for the selected well, sensor and period. The forecast page uses the published results for each supported target.
 
 ## 7. Forecasting methods
 
@@ -164,7 +164,7 @@ Target: `pump_fillage` (%) of the seven pump wells, horizons 1 to 24 hours. A fo
 - All features use only hours at or before the origin. Missing hours stay missing: there is no interpolation.
 - The regularization strength is chosen from 0.1, 1.0 and 10.0 on a validation part inside train (from 15 July 2026). The selected value is 10.0; the three candidates differ only in the third decimal of validation MAE.
 - Models are then refitted on all training rows whose target hour is before the test start and stay fixed during the test.
-- The three methods are scored on the same set of points: a point counts only if the actual value and all three predictions exist. Coverage reports what share of test hours this is (82–92% per well).
+- The three methods are scored on the same points, with a usable actual value and all three predictions. Coverage is the number of common scored points divided by the number of usable actual target observations in the official test period. For pump fillage, coverage averaged over the 24 horizons is 82–92% per well.
 - Automated tests check that changing test values does not change the selected alpha, scaler or coefficients.
 
 ## 8. Results
@@ -244,17 +244,17 @@ Mean MAE over the three fountain wells on the official test period, in atm:
 
 ## 10. Dashboard
 
-`streamlit run app.py -- --db data/processed/wells.sqlite` opens a local read-only dashboard with filters for well type, well, sensor and period. It has five interactive Plotly figures: history with trend, gaps and flags; hour-of-day profile; correlation matrix; coverage heatmap; and forecast against actual values with MAE by horizon. The forecast section switches between the backtest and the latest 24-hour release and lets the user choose the horizon and the methods.
+`streamlit run app.py -- --db data/processed/wells.sqlite` opens a local read-only dashboard with filters for well type, well, sensor and period. Its five interactive Plotly figures cover history with trend, gaps and flags, the hour-of-day profile, the correlation matrix, coverage and forecasts with MAE by horizon. For published pump fillage and tubing pressure results, the forecast section switches between the backtest and latest 24-hour release, with MAE in percentage points and atm respectively.
 
 ## 11. Reproducibility and testing
 
-The project runs from the README: install `requirements.txt`, build the database, run the forecast, start the dashboard. The automated suite has 56 tests on a synthetic fixture (data pipeline, SQL, forecast boundaries and leakage, dashboard states, analysis scripts) plus an optional end-to-end check on the official data that runs the whole chain twice and compares the results.
+Follow the README to install `requirements.txt`, build the database, run the forecast with both targets, and regenerate the reports or start the dashboard. Run `python -m pytest -q -rs` for data, SQL, forecast, dashboard and benchmark tests. Set `WELLS_RUN_OFFICIAL=1` to include checks on the official data and repeated end-to-end runs.
 
 ## 12. Limitations
 
 - NK forecast evaluation covers 258,387 published hourly sensor rows. The 500,000-row volume benchmark covers 1 Hz pressure telemetry from three wells in a separate field and supports conclusions about data processing performance.
 - The source does not state a time zone or the delay with which hourly means become available; the project assumes a value is known when its hour closes.
-- MAE is computed only on hours where all inputs exist. On wells with many gaps the result describes 82–85% of the test hours.
+- MAE is computed on common scored points with a usable actual value and all model inputs. On several wells with gaps, 82–85% of usable test target observations can be scored, averaged over the 24 horizons.
 - Ridge is linear and uses only the target's own history. Other sensors and non-linear models were left out of scope.
 - NK-7 is trained on about ten weeks of data after its regime change, and it remains the hardest well.
 - The cause of the dynamometer area scale shift is unknown, so that sensor is annotated and not corrected.

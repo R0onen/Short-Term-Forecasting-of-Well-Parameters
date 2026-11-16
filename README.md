@@ -19,11 +19,11 @@ python -m wells.data.pipeline --raw-dir data/raw --db data/processed/wells.sqlit
 
 ### Подключение прогноза и интерфейса
 
-После сборки данных выполните команды в указанном порядке на той же БД.
+После сборки данных выполните диагностику, опубликуйте прогноз по обеим целям и запустите дашборд на той же БД.
 
 ```powershell
 python -m wells.forecast.run --db data/processed/wells.sqlite --diagnostic
-python -m wells.forecast.run --db data/processed/wells.sqlite |
+python -m wells.forecast.run --db data/processed/wells.sqlite --targets pump_fillage tubing_pressure |
     Set-Content -Encoding utf8 data/processed/forecast-report.json
 streamlit run app.py -- --db data/processed/wells.sqlite
 ```
@@ -39,7 +39,7 @@ python -m pytest -q -rs
 Remove-Item Env:WELLS_RUN_OFFICIAL
 ```
 
-Первый запуск работает на синтетической фикстуре. Второй дополнительно проверяет официальные CSV и сборку во временной БД. При наличии обоих модулей он также дважды проверяет сквозной сценарий. Если входы лежат в другом каталоге, задайте `WELLS_RAW_DIR`.
+Первый запуск работает на синтетической фикстуре. Второй проверяет официальные CSV, сборку во временной БД и воспроизводимость сквозного сценария. Если входы лежат в другом каталоге, задайте `WELLS_RAW_DIR`.
 
 ## SQL для проверки и защиты
 
@@ -99,22 +99,9 @@ ORDER BY issue_code, well_id, parameter, timestamp;
 
 Модуль `wells.forecast` прогнозирует `pump_fillage` на 1–24 часа вперёд для семи насосных скважин и сравнивает три метода: naive, seasonal naive и Ridge-регрессию на лагах. Используется опубликованное хронологическое разбиение без перемешивания. Параметр `alpha` выбирается только на обучающей части (валидация с 2026-07-15), тестовые значения в обучении не участвуют.
 
-```powershell
-python -m wells.forecast.run --db data/processed/wells.sqlite --diagnostic
-python -m wells.forecast.run --db data/processed/wells.sqlite |
-    Set-Content -Encoding utf8 data/processed/forecast-report.json
-```
+Диагностика читает БД и проверяет границы обучения на NK-7. Команда с `--targets pump_fillage tubing_pressure` применяет те же три метода к `tubing_pressure` фонтанных скважин, публикует обе цели в таблицах `backtest_predictions`, `metrics` и `forecast_path` в одной транзакции и выводит JSON-отчёт.
 
-Первая команда только читает БД и проверяет границы обучения на NK-7. Вторая заполняет таблицы `backtest_predictions`, `metrics` и `forecast_path` в одной транзакции и печатает JSON-отчёт о запуске.
-
-
-### Расширение: прогноз давления фонтанных скважин
-
-```powershell
-python -m wells.forecast.run --db data/processed/wells.sqlite --targets pump_fillage tubing_pressure
-```
-
-С флагом `--targets` те же три метода дополнительно применяются к `tubing_pressure` трёх фонтанных скважин. Запуск без флага рассчитывает только `pump_fillage` и удаляет строки расширения. Дашборд пока показывает прогноз только для `pump_fillage`; результаты по давлению доступны в таблицах `metrics`, `backtest_predictions`, `forecast_path` и в разделе 9 отчёта.
+Запуск без `--targets` публикует только `pump_fillage`, заменяя предыдущий набор прогнозов. Доля покрытия в метриках равна числу общих точек трёх моделей, делённому на число пригодных фактических наблюдений цели в официальном тесте.
 
 ## Дашборд
 
@@ -122,9 +109,11 @@ python -m wells.forecast.run --db data/processed/wells.sqlite --targets pump_fil
 streamlit run app.py -- --db data/processed/wells.sqlite
 ```
 
-В боковой панели выбираются тип скважины, скважина, параметр и период. Три раздела показывают историю и EDA, качество данных, прогноз и оценку. Все пять графиков интерактивные (Plotly).
+В боковой панели выбираются тип скважины, скважина, параметр и период. Три раздела показывают историю и EDA, качество данных, прогноз и оценку. В разделе прогноза выберите `pump_fillage` для насосной скважины или `tubing_pressure` для фонтанной. Для опубликованных прогнозов MAE показана в процентных пунктах или атм соответственно. Все пять графиков интерактивные (Plotly).
 
 ## SQL-запросы, замеры и графики отчёта
+
+Команды полного отчёта используют БД после [прогона с обеими целями](#подключение-прогноза-и-интерфейса). Запуск на БД с одним `pump_fillage` даёт пустые таблицы MAE для давления и удаляет старый график `pressure_mae_by_horizon.png` из выходного каталога.
 
 ```powershell
 python -m wells.analysis.sql_report --db data/processed/wells.sqlite --out reports

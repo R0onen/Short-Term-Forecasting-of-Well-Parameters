@@ -224,7 +224,9 @@ def _evaluate_target(conn, target: str, validation_start, nk7_regime_start) -> d
     path = build_forecast_path(series, pipelines, test_start=test_start, parameter=target, clip_range=clip_range)
     _check_outputs(predictions, metrics, path, len(frames), clip_range)
 
-    origins = path.groupby("well_id")["origin_ts"].first().dt.strftime(TS_FORMAT).to_dict()
+    origins = {}
+    if not path.empty:
+        origins = path.groupby("well_id")["origin_ts"].first().dt.strftime(TS_FORMAT).to_dict()
     return {
         "meta": meta,
         "tables": {"backtest_predictions": predictions, "metrics": metrics, "forecast_path": path},
@@ -250,10 +252,10 @@ def run_forecast(db_path: Path, *, validation_start=None, nk7_regime_start=None,
     targets = list(dict.fromkeys(targets or [TARGET]))
     with closing(_connect(db_path, "rw")) as conn:
         results = {t: _evaluate_target(conn, t, validation_start, nk7_regime_start) for t in targets}
-        tables = {
-            name: pd.concat([results[t]["tables"][name] for t in targets], ignore_index=True)
-            for name in RESULT_TABLES
-        }
+        tables = {}
+        for name, columns in RESULT_TABLES.items():
+            parts = [result["tables"][name] for result in results.values() if not result["tables"][name].empty]
+            tables[name] = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(columns=columns)
         try:
             _publish(conn, tables)
         except sqlite3.Error as exc:

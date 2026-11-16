@@ -238,7 +238,7 @@ def _hourly(rows, column):
 
 
 def forecast_figure(actuals, predictions, metrics, *, mode, origin_ts, archive_end, test_start, test_end,
-                    horizon_h=None) -> go.Figure:
+                    horizon_h=None, unit=None) -> go.Figure:
     """Top panel: facts and predictions. Bottom panel: official test MAE by horizon.
 
     ``mode`` is ``backtest`` (one horizon inside the date slice) or ``release`` (the stored
@@ -246,7 +246,8 @@ def forecast_figure(actuals, predictions, metrics, *, mode, origin_ts, archive_e
     """
     if mode not in ("backtest", "release"):
         raise ValueError(f"mode must be backtest or release, got {mode!r}")
-    unit = actuals["unit"].iloc[0] if not actuals.empty else ""
+    if unit is None:
+        unit = actuals["unit"].iloc[0] if not actuals.empty else ""
     error_unit = "п.п." if unit == "%" else unit
     if mode == "backtest":
         top = "Факт и прогноз на тесте" + (f", горизонт {horizon_h} ч" if horizon_h else "")
@@ -311,7 +312,7 @@ def forecast_figure(actuals, predictions, metrics, *, mode, origin_ts, archive_e
     elif mode == "backtest" and horizon_h:
         fig.add_vline(x=horizon_h, line=dict(color=EVENT_COLOR, width=1, dash="dot"), row=2, col=1)
     fig.update_xaxes(title_text=TIME_AXIS, row=1, col=1)
-    fig.update_yaxes(title_text=_axis_label(actuals), row=1, col=1)
+    fig.update_yaxes(title_text=_axis_label(actuals) or unit, row=1, col=1)
     fig.update_xaxes(title_text="Горизонт, часов", dtick=1, range=[0.5, 24.5], row=2, col=1)
     fig.update_yaxes(title_text=f"MAE, {error_unit}" if error_unit else "MAE", rangemode="tozero", row=2, col=1)
     fig.update_annotations(selector=dict(text=top), x=0, xanchor="left", font=dict(size=15))

@@ -199,8 +199,8 @@ def read_issues(conn, *, well_id, parameter, start_ts, end_ts) -> pd.DataFrame:
     """Audit rows that overlap [start_ts, end_ts), with the raw CSV fields where a source exists.
 
     An hourly issue covers one hour. An annotation covers [timestamp, end_ts) and is open-ended
-    when end_ts is NULL. Rejected records without a normalized hour are always returned so the
-    audit view can list them separately. They match on whatever source context is known.
+    when end_ts is NULL. Rejected records without a normalized hour or a known well can be
+    listed separately by the audit view. They match on whatever source context is known.
     ``parameter=None`` returns every parameter of the well.
     """
     raw = ", ".join(f"r.{field} AS raw_{field}" for field in CSV_FIELDS)
@@ -209,7 +209,7 @@ def read_issues(conn, *, well_id, parameter, start_ts, end_ts) -> pd.DataFrame:
                q.issue_code, q.action, {raw}
         FROM quality_issues AS q
         LEFT JOIN measurements_raw AS r ON r.source_file = q.source_file AND r.source_row = q.source_row
-        WHERE (q.well_id = :well_id OR (q.well_id IS NULL AND q.timestamp IS NULL))
+        WHERE (q.well_id = :well_id OR q.well_id IS NULL)
           AND (:parameter IS NULL OR q.parameter = :parameter OR q.parameter IS NULL)
           AND (q.timestamp IS NULL
                OR (q.action = 'annotate' AND q.timestamp < :end_ts
