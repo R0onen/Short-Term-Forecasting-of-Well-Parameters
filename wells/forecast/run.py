@@ -11,12 +11,14 @@ import platform
 import sqlite3
 import subprocess
 import sys
-from contextlib import closing
+from contextlib import closing, nullcontext
+from importlib.metadata import version
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import sklearn
+from threadpoolctl import threadpool_limits
 
 from .evaluation import (
     ALPHAS,
@@ -26,6 +28,7 @@ from .evaluation import (
     PREFERRED_ALPHA,
     build_forecast_path,
     evaluate_backtest,
+    fit_bonus,
     fit_final,
     select_alpha,
     validation_rows,
@@ -33,6 +36,8 @@ from .evaluation import (
 from .features import (
     CLIP_RANGE,
     HORIZONS,
+    LAG_COLUMNS,
+    ORIGIN_SENSORS,
     REGIME_WELL,
     RIDGE_FEATURES,
     TARGET,
@@ -41,7 +46,7 @@ from .features import (
     build_features,
     eligible_fit_rows,
 )
-from .models import MODELS
+from .models import BONUS_MODELS, BOOSTING_FEATURES, BOOSTING_PARAMS, MODELS
 
 DEFAULT_DB = Path("data/processed/wells.sqlite")
 DEFAULT_VALIDATION_START = "2026-07-15 00:00:00"
@@ -62,6 +67,7 @@ REQUIRED_TABLES = {
     **RESULT_TABLES,
 }
 META_KEYS = ["revision", "train_end", "test_start", "test_end", "train_sha256", "test_sha256"]
+SCHEMA_FILE = Path(__file__).resolve().parents[1] / "data/sql/schema.sql"
 
 
 def _connect(db_path: Path, mode: str) -> sqlite3.Connection:
@@ -107,8 +113,21 @@ def _load(conn: sqlite3.Connection, *, train_only: bool = False, target: str = T
     return meta, series
 
 
-def _frames(series_by_well, horizons=HORIZONS, value_range=CLIP_RANGE):
-    return {(well, h): build_features(s, h, value_range) for well, s in series_by_well.items() for h in horizons}
+def _sensors_by_well(conn: sqlite3.Connection, wells) -> dict[str, pd.DataFrame]:
+    columns = ", ".join(ORIGIN_SENSORS)
+    wide = pd.read_sql_query(f"SELECT well_id, timestamp, {columns} FROM measurements_wide",
+                             conn, parse_dates=["timestamp"]).set_index(["well_id", "timestamp"])
+    return {well: wide.loc[well] for well in wells}
+
+
+def _frames(series_by_well, horizons=HORIZONS, value_range=CLIP_RANGE, sensors_by_well=None):
+    return {
+        (well, h): build_features(s, h, value_range, origin_sensors=(
+            None if sensors_by_well is None else sensors_by_well[well]
+        ))
+        for well, s in series_by_well.items()
+        for h in horizons
+    }
 
 
 def _records(frame: pd.DataFrame) -> list[dict]:
@@ -122,7 +141,7 @@ def _records(frame: pd.DataFrame) -> list[dict]:
 
 
 def _check_outputs(predictions: pd.DataFrame, metrics: pd.DataFrame, path: pd.DataFrame, n_groups: int,
-                   clip_range=CLIP_RANGE) -> None:
+                   clip_range=CLIP_RANGE, models=MODELS) -> None:
     """Writer-side contract checks before anything is committed."""
     for name, table in (("backtest_predictions", predictions), ("forecast_path", path)):
         if table.empty:
@@ -137,19 +156,35 @@ def _check_outputs(predictions: pd.DataFrame, metrics: pd.DataFrame, path: pd.Da
             raise ForecastError(f"{name}: prediction outside the valid range or non-finite")
     if not predictions.empty:
         per_key = predictions.groupby(["well_id", "origin_ts", "horizon_h"])["model"].nunique()
-        if not (per_key == len(MODELS)).all():
+        if not (per_key == len(models)).all():
             raise ForecastError("backtest_predictions: a scored key lacks a model")
-    if len(metrics) != n_groups * len(MODELS):
-        raise ForecastError(f"metrics: expected {n_groups * len(MODELS)} rows, got {len(metrics)}")
+    if len(metrics) != n_groups * len(models):
+        raise ForecastError(f"metrics: expected {n_groups * len(models)} rows, got {len(metrics)}")
     if not path.empty:
         release = path.groupby("well_id").agg(n=("model", "size"), origins=("origin_ts", "nunique"))
-        if not ((release["n"] == len(HORIZONS) * len(MODELS)) & (release["origins"] == 1)).all():
+        if not ((release["n"] == len(HORIZONS) * len(models)) & (release["origins"] == 1)).all():
             raise ForecastError("forecast_path: incomplete release group")
 
 
-def _publish(conn: sqlite3.Connection, tables: dict[str, pd.DataFrame]) -> None:
+def _upgrade_result_tables(conn: sqlite3.Connection) -> None:
+    """Replace legacy output table definitions using the current source schema."""
+    definitions = dict(conn.execute("SELECT name, sql FROM sqlite_schema WHERE type = 'table'"))
+    legacy = [name for name in RESULT_TABLES if not all(model in definitions[name] for model in BONUS_MODELS)]
+    if legacy:
+        with closing(sqlite3.connect(":memory:")) as reference:
+            reference.executescript(SCHEMA_FILE.read_text(encoding="utf-8"))
+            current = dict(reference.execute("SELECT name, sql FROM sqlite_schema WHERE type = 'table'"))
+        for name in legacy:
+            conn.execute(f"DROP TABLE {name}")
+            conn.execute(current[name])
+
+
+def _publish(conn: sqlite3.Connection, tables: dict[str, pd.DataFrame], *, upgrade_schema=False) -> None:
     """Replace all three result sets in one transaction; roll back on any failure."""
     with conn:
+        conn.execute("BEGIN IMMEDIATE")
+        if upgrade_schema:
+            _upgrade_result_tables(conn)
         for name in RESULT_TABLES:
             conn.execute(f"DELETE FROM {name}")
         for name, columns in RESULT_TABLES.items():
@@ -206,23 +241,36 @@ def _validation_report(alpha, table: pd.DataFrame) -> dict:
     }
 
 
-def _evaluate_target(conn, target: str, validation_start, nk7_regime_start) -> dict:
+def _evaluate_target(conn, target: str, validation_start, nk7_regime_start, *, bonus_models=False) -> dict:
     """Select alpha, refit, backtest and build the release for one target. Writes nothing."""
     clip_range = TARGET_RANGES.get(target, CLIP_RANGE)
     meta, series = _load(conn, target=target)
     test_start, test_end = meta["test_start"], meta["test_end"]
-    frames = _frames(series, value_range=clip_range)
+    sensors = _sensors_by_well(conn, series) if bonus_models else None
+    frames = _frames(series, value_range=clip_range, sensors_by_well=sensors)
 
     alpha, validation = select_alpha(
         frames, validation_start=validation_start, test_start=test_start, nk7_regime_start=nk7_regime_start,
         clip_range=clip_range,
     )
     pipelines, fit_counts = fit_final(frames, alpha, test_start=test_start, nk7_regime_start=nk7_regime_start)
+    bonus = fit_bonus(frames, test_start=test_start, nk7_regime_start=nk7_regime_start) if bonus_models else None
     predictions, metrics = evaluate_backtest(
-        frames, pipelines, test_start=test_start, test_end=test_end, parameter=target, clip_range=clip_range
+        frames, pipelines, test_start=test_start, test_end=test_end, parameter=target, clip_range=clip_range,
+        bonus_pipelines=bonus,
     )
-    path = build_forecast_path(series, pipelines, test_start=test_start, parameter=target, clip_range=clip_range)
-    _check_outputs(predictions, metrics, path, len(frames), clip_range)
+    path = build_forecast_path(series, pipelines, test_start=test_start, parameter=target, clip_range=clip_range,
+                               bonus_pipelines=bonus, sensors_by_well=sensors)
+    models = MODELS + BONUS_MODELS if bonus_models else MODELS
+    _check_outputs(predictions, metrics, path, len(frames), clip_range, models)
+
+    config = _config(meta, series, HORIZONS, validation_start, nk7_regime_start, target)
+    if bonus_models:
+        config["bonus_models"] = {
+            "gradient_boosting": {"features": BOOSTING_FEATURES, "parameters": BOOSTING_PARAMS},
+            "statsmodels_ar": {"estimator": "statsmodels OLS", "intercept": True, "features": LAG_COLUMNS,
+                               "version": version("statsmodels")},
+        }
 
     origins = {}
     if not path.empty:
@@ -231,7 +279,7 @@ def _evaluate_target(conn, target: str, validation_start, nk7_regime_start) -> d
         "meta": meta,
         "tables": {"backtest_predictions": predictions, "metrics": metrics, "forecast_path": path},
         "report": {
-            "config": _config(meta, series, HORIZONS, validation_start, nk7_regime_start, target),
+            "config": config,
             "validation": _validation_report(alpha, validation),
             "final_fit_counts": _records(fit_counts),
             "release_origins": {well: origins.get(well) for well in series},
@@ -239,7 +287,8 @@ def _evaluate_target(conn, target: str, validation_start, nk7_regime_start) -> d
     }
 
 
-def run_forecast(db_path: Path, *, validation_start=None, nk7_regime_start=None, targets=None) -> dict:
+def run_forecast(db_path: Path, *, validation_start=None, nk7_regime_start=None, targets=None,
+                 bonus_models=False) -> dict:
     """Run the full experiment, publish results and return the run report.
 
     `targets` defaults to the approved `pump_fillage`. Extra targets (for
@@ -250,14 +299,20 @@ def run_forecast(db_path: Path, *, validation_start=None, nk7_regime_start=None,
     validation_start = validation_start or DEFAULT_VALIDATION_START
     nk7_regime_start = nk7_regime_start or DEFAULT_NK7_REGIME_START
     targets = list(dict.fromkeys(targets or [TARGET]))
-    with closing(_connect(db_path, "rw")) as conn:
-        results = {t: _evaluate_target(conn, t, validation_start, nk7_regime_start) for t in targets}
+    if bonus_models and TARGET not in targets:
+        raise ForecastError("--bonus-models requires pump_fillage in --targets")
+    threads = threadpool_limits(limits=1) if bonus_models else nullcontext()
+    with closing(_connect(db_path, "rw")) as conn, threads:
+        results = {
+            t: _evaluate_target(conn, t, validation_start, nk7_regime_start, bonus_models=bonus_models and t == TARGET)
+            for t in targets
+        }
         tables = {}
         for name, columns in RESULT_TABLES.items():
             parts = [result["tables"][name] for result in results.values() if not result["tables"][name].empty]
             tables[name] = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(columns=columns)
         try:
-            _publish(conn, tables)
+            _publish(conn, tables, upgrade_schema=bonus_models)
         except sqlite3.Error as exc:
             raise ForecastError(f"publication failed, previous results kept: {exc}") from exc
 
@@ -271,6 +326,12 @@ def run_forecast(db_path: Path, *, validation_start=None, nk7_regime_start=None,
     }
     if len(targets) > 1:
         report["extra_targets"] = {t: results[t]["report"] for t in targets[1:]}
+    if bonus_models:
+        metrics = results[TARGET]["tables"]["metrics"]
+        summary = metrics.assign(mae=pd.to_numeric(metrics["mae"])).groupby("model").agg(
+            macro_mae=("mae", "mean"), scored_well_horizons=("mae", "count"), scored_keys=("n_common", "sum"),
+        )
+        report["bonus_comparison"] = _records(summary.reindex(MODELS + BONUS_MODELS).reset_index())
     return report
 
 
@@ -329,9 +390,14 @@ def main(argv=None) -> int:
     parser.add_argument("--diagnostic", action="store_true", help="read-only train-only check, no DB writes")
     parser.add_argument("--targets", nargs="+", choices=sorted(TARGET_RANGES), default=[TARGET],
                         help="targets to forecast; the default is the approved pump_fillage only")
+    parser.add_argument("--bonus-models", action="store_true",
+                        help="also compare gradient boosting and statsmodels autoregression for pump_fillage")
     args = parser.parse_args(argv)
+    if args.diagnostic and args.bonus_models:
+        parser.error("--bonus-models is for a full run")
     try:
-        report = run_diagnostic(args.db) if args.diagnostic else run_forecast(args.db, targets=args.targets)
+        report = (run_diagnostic(args.db) if args.diagnostic
+                  else run_forecast(args.db, targets=args.targets, bonus_models=args.bonus_models))
     except (ForecastError, ValueError, sqlite3.Error) as exc:
         print(f"forecast failed: {exc}", file=sys.stderr)
         return 1

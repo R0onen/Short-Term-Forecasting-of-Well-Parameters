@@ -6,8 +6,14 @@ from plotly.subplots import make_subplots
 
 # Categorical slots in fixed order. A colour follows the entity, never its rank in a selection.
 SERIES_COLORS = ("#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948")
-MODEL_COLORS = {"naive": SERIES_COLORS[0], "seasonal_naive": SERIES_COLORS[1], "ridge": SERIES_COLORS[2]}
-MODEL_LABELS = {"naive": "Naive", "seasonal_naive": "Seasonal naive (24 ч)", "ridge": "Ridge"}
+MODEL_LABELS = {
+    "naive": "Naive",
+    "seasonal_naive": "Seasonal naive (24 ч)",
+    "ridge": "Ridge",
+    "gradient_boosting": "Gradient boosting",
+    "statsmodels_ar": "Statsmodels AR",
+}
+MODEL_COLORS = dict(zip(MODEL_LABELS, SERIES_COLORS))
 ACTUAL_COLOR = "#6f6e69"
 FLAG_COLOR = "#b3261e"
 EVENT_COLOR = "#8a8880"

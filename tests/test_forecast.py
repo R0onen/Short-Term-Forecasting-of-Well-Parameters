@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 import numpy as np
@@ -18,7 +19,7 @@ from wells.forecast.evaluation import (
     select_alpha,
 )
 from wells.forecast.features import ForecastError, build_features, eligible_fit_rows
-from wells.forecast.models import fit_ridge, predict_naive, predict_ridge, predict_seasonal_naive
+from wells.forecast.models import BONUS_MODELS, MODELS, fit_ridge, predict_naive, predict_ridge, predict_seasonal_naive
 from wells.forecast.run import run_diagnostic, run_forecast
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -380,3 +381,52 @@ def test_failing_extra_target_publishes_nothing(db):
     with pytest.raises(ForecastError, match="unsupported target"):
         run_forecast(db, targets=["SPM"], **DATES)
     assert _results(db) == before
+
+
+def test_bonus_features_read_auxiliary_sensors_at_the_origin_only():
+    series = fixture_series()
+    origin = ts("2026-01-04 05:00")
+    sensors = pd.DataFrame({"SPM": [4.0, 8.0], "min_rod_weight": [1.0, 9.0]},
+                           index=[origin, origin + pd.Timedelta(hours=6)])
+    actual = row_at(build_features(series, 6, origin_sensors=sensors), "2026-01-04 05:00")
+    assert actual["SPM"] == 4.0 and actual["min_rod_weight"] == 1.0
+    assert np.isnan(actual["max_rod_weight"])
+    earlier = row_at(build_features(series, 6, origin_sensors=sensors), "2026-01-04 04:00")
+    assert np.isnan(earlier["SPM"])
+
+
+def test_bonus_forecast_upgrades_legacy_database_and_preserves_shared_keys(tmp_path):
+    db = tmp_path / "legacy.sqlite"
+    legacy = (ROOT / "wells/data/sql/schema.sql").read_text(encoding="utf-8")
+    with closing(sqlite3.connect(db)) as conn:
+        conn.executescript(legacy.replace(", 'gradient_boosting', 'statsmodels_ar'", ""))
+        conn.executescript((ROOT / "tests/fixtures/seed.sql").read_text(encoding="utf-8"))
+        with conn:
+            conn.execute("""
+                UPDATE measurements_wide
+                SET SPM = 2 + CAST(strftime('%H', timestamp) AS REAL) / 8,
+                    min_rod_weight = 2500, max_rod_weight = 4000
+                WHERE well_id = 'NK-7'
+            """)
+    run_forecast(db, **DATES)
+    base = query(db, "SELECT * FROM backtest_predictions ORDER BY well_id, origin_ts, horizon_h, model")
+    report = run_forecast(db, bonus_models=True, **DATES)
+
+    base_after = query(db, """
+        SELECT * FROM backtest_predictions WHERE model IN ('naive', 'seasonal_naive', 'ridge')
+        ORDER BY well_id, origin_ts, horizon_h, model
+    """)
+    assert [row[:6] for row in base_after] == [row[:6] for row in base]
+    np.testing.assert_allclose([row[6:] for row in base_after], [row[6:] for row in base], rtol=1e-9, atol=1e-9)
+    assert {row[0] for row in query(db, "SELECT DISTINCT model FROM metrics")} == set(MODELS + BONUS_MODELS)
+    assert query(db, """
+        SELECT DISTINCT n FROM (
+            SELECT count(*) AS n FROM backtest_predictions GROUP BY well_id, origin_ts, horizon_h
+        )
+    """) == [(5,)]
+    assert report["table_counts"]["forecast_path"] == report["table_counts"]["metrics"] == 120
+    assert len({item["scored_keys"] for item in report["bonus_comparison"]}) == 1
+    assert query(db, "PRAGMA foreign_key_check") == []
+
+    run_forecast(db, **DATES)
+    assert {row[0] for row in query(db, "SELECT DISTINCT model FROM metrics")} == set(MODELS)

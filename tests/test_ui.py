@@ -396,6 +396,21 @@ def test_app_pressure_forecasts_and_model_selection(db_copy, monkeypatch):
     assert "давность 0 ч" in _texts(app, "info") and "MAE в atm" in _texts(app, "markdown")
 
 
+def test_app_shows_bonus_models_where_published(db_copy, monkeypatch):
+    _edit(db_copy,
+          "INSERT INTO metrics VALUES ('NK-7', 'pump_fillage', 1, 'gradient_boosting', 1, 1, 72, 1.0/72)",
+          "INSERT INTO metrics VALUES ('NK-7', 'pump_fillage', 1, 'statsmodels_ar', 1, 1, 72, 1.0/72)",
+          "INSERT INTO metrics VALUES ('NK-76', 'tubing_pressure', 1, 'naive', 1, 1, 1, 1)")
+    app = _app(db_copy, monkeypatch)
+    selected = app.multiselect(key="models").value
+    assert set(selected) == set(queries.FORECAST_MODELS)
+    assert any("Gradient boosting" in chart.proto.spec for chart in app.get("plotly_chart"))
+    app.multiselect(key="models").set_value(["statsmodels_ar"]).run()
+    assert not app.exception
+    app.selectbox(key="well_type").set_value("fountain").run()
+    assert not app.exception and app.multiselect(key="models").value == ["naive"]
+
+
 def test_app_empty_slice_keeps_selection_and_official_mae(seeded_path, monkeypatch):
     app = _app(seeded_path, monkeypatch)
     app.selectbox(key="well_type").set_value("fountain").run()

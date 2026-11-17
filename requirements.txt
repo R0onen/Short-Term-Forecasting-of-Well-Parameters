@@ -7,3 +7,4 @@ streamlit==1.50.0
 pytest==8.4.2
 pyarrow==26.0.1
 matplotlib==3.10.3
+statsmodels==0.14.6

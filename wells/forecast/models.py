@@ -8,9 +8,12 @@ from sklearn.linear_model import Ridge
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-from .features import CLIP_RANGE, RIDGE_FEATURES, complete_inputs
+from .features import CLIP_RANGE, LAG_COLUMNS, ORIGIN_SENSORS, RIDGE_FEATURES, complete_inputs
 
 MODELS = ("naive", "seasonal_naive", "ridge")
+BONUS_MODELS = ("gradient_boosting", "statsmodels_ar")
+BOOSTING_FEATURES = [*RIDGE_FEATURES, *ORIGIN_SENSORS]
+BOOSTING_PARAMS = {"max_iter": 80, "max_leaf_nodes": 15, "learning_rate": 0.08, "early_stopping": False}
 
 
 def predict_naive(frame: pd.DataFrame) -> pd.Series:
@@ -37,9 +40,36 @@ def predict_ridge(pipeline: Pipeline, frame: pd.DataFrame, clip_range=CLIP_RANGE
     return out
 
 
-def predict_all(pipeline: Pipeline, frame: pd.DataFrame, clip_range=CLIP_RANGE) -> dict[str, pd.Series]:
+def _ar_design(rows: pd.DataFrame) -> np.ndarray:
+    return np.column_stack((np.ones(len(rows)), rows[LAG_COLUMNS].to_numpy(dtype=float)))
+
+
+def fit_bonus_models(rows: pd.DataFrame) -> dict:
+    """Fit fixed-configuration boosting and direct autoregression on training rows."""
+    from sklearn.ensemble import HistGradientBoostingRegressor
+    from statsmodels.regression.linear_model import OLS
+
     return {
+        "gradient_boosting": HistGradientBoostingRegressor(**BOOSTING_PARAMS).fit(
+            rows[BOOSTING_FEATURES], rows["y_true"],
+        ),
+        "statsmodels_ar": OLS(rows["y_true"].to_numpy(), _ar_design(rows), missing="raise").fit(),
+    }
+
+
+def predict_all(pipeline: Pipeline, frame: pd.DataFrame, clip_range=CLIP_RANGE, *, bonus=None) -> dict[str, pd.Series]:
+    predictions = {
         "naive": predict_naive(frame),
         "seasonal_naive": predict_seasonal_naive(frame),
         "ridge": predict_ridge(pipeline, frame, clip_range),
     }
+    if bonus is not None:
+        mask = complete_inputs(frame)
+        rows = frame.loc[mask]
+        for model, fitted in bonus.items():
+            values = pd.Series(np.nan, index=frame.index, name="y_pred")
+            if not rows.empty:
+                design = rows[BOOSTING_FEATURES] if model == "gradient_boosting" else _ar_design(rows)
+                values.loc[mask] = np.clip(fitted.predict(design), *clip_range)
+            predictions[model] = values
+    return predictions

@@ -255,7 +255,7 @@ Follow the README to install `requirements.txt`, build the database, run the for
 - NK forecast evaluation covers 258,387 published hourly sensor rows. The 500,000-row volume benchmark covers 1 Hz pressure telemetry from three wells in a separate field and supports conclusions about data processing performance.
 - The source does not state a time zone or the delay with which hourly means become available; the project assumes a value is known when its hour closes.
 - MAE is computed on common scored points with a usable actual value and all model inputs. On several wells with gaps, 82–85% of usable test target observations can be scored, averaged over the 24 horizons.
-- Ridge is linear and uses only the target's own history. Other sensors and non-linear models were left out of scope.
+- Ridge uses the target's own history and calendar terms. Section 14 tests a non-linear model with additional sensors.
 - NK-7 is trained on about ten weeks of data after its regime change, and it remains the hardest well.
 - The cause of the dynamometer area scale shift is unknown, so that sensor is annotated and not corrected.
 
@@ -266,6 +266,45 @@ Follow the README to install `requirements.txt`, build the database, run the for
 - A simple lag regression beats both baselines on six of seven wells and at every horizon on average, reducing MAE from 11.99 (naive) to 10.12 percentage points, at a negligible computing cost.
 - Where a well is stable, the naive forecast is equally good, which the report states rather than hides.
 - The extension to fountain-well tubing pressure shows the opposite ranking: the baselines beat the regression where the test period differs from the training period.
+
+## 14. Additional experiments
+
+### Forecasting with boosting and statsmodels
+
+The optional `--bonus-models` run compares five methods for `pump_fillage` on the same 174,827 scored keys across 168 well-horizon groups. HistGradientBoostingRegressor uses the Ridge inputs plus SPM and minimum and maximum rod loads observed at the forecast origin. The booster handles missing auxiliary measurements directly. Its configuration uses 80 iterations, 15 maximum leaves and learning rate 0.08, with early stopping disabled. The statsmodels model fits a separate direct autoregression for each well and horizon by regressing the future target on the seven target lags and an intercept with OLS. Both models use the same eligible training rows as the final Ridge fit and the same NK-7 regime cutoff.
+
+| Method | Macro MAE, percentage points |
+| --- | ---: |
+| Naive | 11.986 |
+| Seasonal naive | 12.700 |
+| Ridge | 10.121 |
+| Gradient boosting with auxiliary sensors | 11.020 |
+| Statsmodels direct autoregression | 10.097 |
+
+The autoregression improves the measured MAE by 0.024 percentage points over Ridge on this test. Boosting improves on the two persistence baselines. Its MAE is 0.899 points higher than Ridge, so the tested combination of boosting and additional sensors gives no aggregate gain over Ridge. The combined publication was verified against the three-method run. All 720 original metric rows matched, including the pressure target. [Configuration and results](reports/bonus_forecast.json), [scikit-learn boosting](https://scikit-learn.org/stable/modules/generated/sklearn.ensemble.HistGradientBoostingRegressor.html), [statsmodels OLS](https://www.statsmodels.org/stable/generated/statsmodels.regression.linear_model.OLS.html).
+
+### Residual-based anomaly detection
+
+The detector forecasts `max_rod_weight` one hour ahead with persistence. For each well it fixes a 99th-percentile threshold using absolute residuals from adjacent usable hours in training. It raises an alarm on a larger residual when the test reading arrives. The official test scores consecutive observed pairs before masking and uses the published `weight_overflow` flag as the reference label. This sensor has positive flags and lets the evaluation retain flagged test readings that the forecast pipeline masks for other uses.
+
+Of 8,737 observed test rows, 8,670 have an exact preceding hour and a calibrated threshold. The detector yields 611 true positives, 136 false positives, 693 false negatives and 7,230 true negatives. Precision is **81.79%**, recall is **46.86%**, and F1 is **59.58%**. Seven published flags lack a scorable preceding hour. NK-7 accounts for 1,231 of the 1,311 published test flags, so the aggregate results mostly describe that well. The label measures published sensor-quality issues. [Per-well results and thresholds](reports/anomaly_detection.json).
+
+### Loading at one million rows
+
+The scale test repeats records deterministically within each published partition to create a temporary **1,000,000-row** input. The copy stresses loading and aggregation. The model evaluation continues to use the published NK data. All four loaders processed the requested row count.
+
+| Approach | Elapsed time | Recorded memory or disk result |
+| --- | ---: | --- |
+| Default CSV types | 0.569 s | 332.03 MiB DataFrame |
+| Typed CSV | 0.586 s | 21.94 MiB DataFrame |
+| Chunked two-column count | 0.521 s | 4.52 MiB peak traced Python allocations |
+| Parquet | 0.028 s read | 6.51 MiB on disk versus 73.22 MiB for CSV |
+
+Time and traced memory describe one measured run. Chunked counting reads only the well and parameter columns. The separate 500,000-row Petrobras benchmark uses published telemetry from real wells. [Published and synthetic loading results](reports/scale_benchmark.json).
+
+### Continuous integration
+
+GitHub Actions installs the pinned dependencies and runs the fixture test suite on Ubuntu with Python 3.12 for every push and pull request. Official-data tests can be run locally through `WELLS_RUN_OFFICIAL=1`. [GitHub Actions workflow](.github/workflows/tests.yml).
 
 ## References
 

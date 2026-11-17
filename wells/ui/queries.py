@@ -5,12 +5,14 @@ from pathlib import Path
 
 import pandas as pd
 
+from wells.forecast.models import BONUS_MODELS, MODELS
+
 SQL_DIR = Path(__file__).resolve().parents[1] / "data" / "sql"
 SENSORS = ("SPM", "casing_pressure", "dynamometer_area", "line_pressure",
            "max_rod_weight", "min_rod_weight", "pump_fillage", "tubing_pressure")
 MODES = ("raw", "clean")
 GRAINS = ("day", "month")
-MODELS = ("naive", "seasonal_naive", "ridge")
+FORECAST_MODELS = MODELS + BONUS_MODELS
 RESULT_TABLES = ("backtest_predictions", "metrics", "forecast_path")
 CSV_FIELDS = ("well_id", "well_type", "timestamp", "parameter", "value", "unit", "n_obs", "flag")
 REQUIRED_COLUMNS = {
@@ -240,7 +242,7 @@ def read_result_counts(conn) -> dict[str, int]:
 def _models(models):
     chosen = tuple(dict.fromkeys(models))
     for model in chosen:
-        _check(model, MODELS, "model")
+        _check(model, FORECAST_MODELS, "model")
     bindings = {f"model_{index}": model for index, model in enumerate(chosen)}
     # An empty IN list is valid SQLite and matches nothing.
     return ", ".join(f":{name}" for name in bindings), bindings

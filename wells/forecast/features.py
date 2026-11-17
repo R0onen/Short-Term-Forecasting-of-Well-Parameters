@@ -11,6 +11,7 @@ LAGS = (0, 1, 2, 3, 6, 12, 24)
 LAG_COLUMNS = [f"lag_{k}" for k in LAGS]
 CALENDAR_COLUMNS = ["target_hour_sin", "target_hour_cos"]
 RIDGE_FEATURES = LAG_COLUMNS + CALENDAR_COLUMNS
+ORIGIN_SENSORS = ("SPM", "min_rod_weight", "max_rod_weight")
 CLIP_RANGE = (0.0, 100.0)
 # Supported targets and their valid value range (None = unbounded above).
 TARGET_RANGES = {TARGET: CLIP_RANGE, "tubing_pressure": (0.0, None)}
@@ -26,7 +27,9 @@ def _hours(n: int) -> pd.Timedelta:
     return pd.Timedelta(hours=n)
 
 
-def build_features(series: pd.Series, horizon_h: int, value_range=CLIP_RANGE) -> pd.DataFrame:
+def build_features(
+    series: pd.Series, horizon_h: int, value_range=CLIP_RANGE, *, origin_sensors: pd.DataFrame | None = None,
+) -> pd.DataFrame:
     """Return one row per origin hour `t` with the target at `t + horizon_h`.
 
     Predictors only read hours at or before the origin. Missing hours stay
@@ -38,8 +41,9 @@ def build_features(series: pd.Series, horizon_h: int, value_range=CLIP_RANGE) ->
         raise ValueError("series must have a DatetimeIndex")
     if series.index.has_duplicates:
         raise ValueError("series has duplicate timestamps")
+    columns = FRAME_COLUMNS if origin_sensors is None else [*FRAME_COLUMNS, *ORIGIN_SENSORS]
     if series.empty:
-        return pd.DataFrame(columns=FRAME_COLUMNS)
+        return pd.DataFrame(columns=columns)
 
     s = series.sort_index().astype(float)
     if (s.index != s.index.floor("h")).any():
@@ -67,7 +71,10 @@ def build_features(series: pd.Series, horizon_h: int, value_range=CLIP_RANGE) ->
     angle = 2.0 * np.pi * target.hour.to_numpy() / 24.0
     data["target_hour_sin"] = np.sin(angle)
     data["target_hour_cos"] = np.cos(angle)
-    return pd.DataFrame(data, columns=FRAME_COLUMNS)
+    if origin_sensors is not None:
+        sensors = origin_sensors.reindex(index=origin, columns=ORIGIN_SENSORS)
+        data.update({name: sensors[name].to_numpy(dtype=float, na_value=np.nan) for name in ORIGIN_SENSORS})
+    return pd.DataFrame(data, columns=columns)
 
 
 def complete_inputs(frame: pd.DataFrame) -> pd.Series:

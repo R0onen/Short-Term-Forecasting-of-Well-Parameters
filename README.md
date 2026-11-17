@@ -137,6 +137,23 @@ python -m wells.analysis.pressure_benchmark
 
 Файлы `WELL-*` содержат опубликованные ряды трёх реальных скважин Petrobras. Издатель привёл телеметрию к частоте 1 Гц линейной интерполяцией. Почасовой прогноз и его метрики рассчитываются на официальных 258 387 строках NK. Petrobras 3W используется для отдельной проверки производительности. [Источник Petrobras 3W и лицензия CC BY 4.0](https://github.com/petrobras/3W/blob/c86cc7c70063646910be7292de8a54a6fb2a8399/dataset/README.md), [методика подготовки рядов](https://arxiv.org/html/2507.01048v1#S2.SS5).
 
+## Дополнительные эксперименты
+
+После сборки NK установите зависимости из `requirements.txt` и выполните команды из корня проекта. Перед публикацией прогнозов закройте открытый дашборд.
+
+```powershell
+python -m wells.forecast.run --targets pump_fillage tubing_pressure --bonus-models |
+    Set-Content -Encoding utf8 data/processed/bonus-forecast-report.json
+python -m wells.analysis.anomaly_detection --out data/processed/anomaly-detection.json
+python -m wells.analysis.scale_benchmark --out data/processed/scale-benchmark.json
+streamlit run app.py -- --db data/processed/wells.sqlite
+```
+
+- `--bonus-models` добавляет к сравнению по `pump_fillage` градиентный бустинг с SPM и нагрузками на шток, а также авторегрессию через statsmodels. Пять методов оцениваются на общих точках по каждому горизонту. В прогнозе давления доступны три исходных метода. Дашборд показывает модели, для которых опубликованы метрики. [Результаты прогона](reports/bonus_forecast.json)
+- Детектор сравнивает остаток одночасового прогноза `max_rod_weight` с порогом, рассчитанным на обучении. Precision, recall и F1 показывают согласие с опубликованными флагами `weight_overflow`. [Общая оценка и разрез по скважинам](reports/anomaly_detection.json)
+- Бенчмарк повторяет записи NK до **1 000 000 строк** во временном каталоге и измеряет загрузку CSV и Parquet. Синтетическая копия используется для измерения производительности. [Результаты бенчмарка](reports/scale_benchmark.json)
+- GitHub Actions запускает тесты на Python 3.12 при каждом push и pull request. Тесты используют локальные фикстуры. Для проверок на официальных данных доступен `WELLS_RUN_OFFICIAL=1`. [Workflow](.github/workflows/tests.yml)
+
 ## Структура проекта
 
 | Путь | Назначение |

@@ -15,7 +15,7 @@ from .features import (
     complete_inputs,
     eligible_fit_rows,
 )
-from .models import MODELS, fit_ridge, predict_all, predict_ridge
+from .models import fit_bonus_models, fit_ridge, predict_all, predict_ridge
 
 ALPHAS = (0.1, 1.0, 10.0)
 PREFERRED_ALPHA = 1.0
@@ -98,8 +98,21 @@ def fit_final(frames, alpha: float, *, test_start, nk7_regime_start):
     return pipelines, pd.DataFrame(counts, columns=["well_id", "horizon_h", "n_fit"])
 
 
-def evaluate_backtest(frames, pipelines, *, test_start, test_end, parameter=TARGET, clip_range=CLIP_RANGE):
-    """Score the three methods on their common keys in the official test period.
+def fit_bonus(frames, *, test_start, nk7_regime_start):
+    """Fit both bonus models using the same eligible origins as the final Ridge fit."""
+    return {
+        (well, horizon): fit_bonus_models(_require(
+            eligible_fit_rows(frame, well_id=well, cutoff=test_start, regime_start=nk7_regime_start),
+            well, horizon, "bonus_fit",
+        ))
+        for (well, horizon), frame in frames.items()
+    }
+
+
+def evaluate_backtest(
+    frames, pipelines, *, test_start, test_end, parameter=TARGET, clip_range=CLIP_RANGE, bonus_pipelines=None,
+):
+    """Score all selected methods on common keys in the official test period.
 
     `test_end` is inclusive. Every `(well, horizon, model)` gets a metric row,
     including groups without any scored key.
@@ -113,14 +126,17 @@ def evaluate_backtest(frames, pipelines, *, test_start, test_end, parameter=TARG
         rows = frame[
             (frame["origin_ts"] >= start - _HOUR) & (frame["target_ts"] >= start) & (frame["target_ts"] <= end)
         ]
-        preds = predict_all(pipelines[(well_id, horizon_h)], rows, clip_range)
+        key = (well_id, horizon_h)
+        preds = predict_all(
+            pipelines[key], rows, clip_range, bonus=None if bonus_pipelines is None else bonus_pipelines[key],
+        )
         common = rows["y_true"].notna()
         for pred in preds.values():
             common &= pred.notna()
         scored = rows[common]
         n_common = len(scored)
-        for model in MODELS:
-            y_pred = preds[model][common]
+        for model, pred in preds.items():
+            y_pred = pred[common]
             if n_common:
                 predictions.append(
                     pd.DataFrame(
@@ -168,7 +184,10 @@ def latest_origin(series: pd.Series, *, test_start):
     return full[full].index[-1] if full.any() else None
 
 
-def build_forecast_path(series_by_well, pipelines, *, test_start, parameter=TARGET, clip_range=CLIP_RANGE) -> pd.DataFrame:
+def build_forecast_path(
+    series_by_well, pipelines, *, test_start, parameter=TARGET, clip_range=CLIP_RANGE,
+    bonus_pipelines=None, sensors_by_well=None,
+) -> pd.DataFrame:
     """One 24-horizon trajectory per model from each well's latest eligible origin."""
     parts = []
     for well_id, series in series_by_well.items():
@@ -176,9 +195,14 @@ def build_forecast_path(series_by_well, pipelines, *, test_start, parameter=TARG
         if origin is None:
             continue
         window = series.sort_index().loc[origin - pd.Timedelta(hours=max(LAGS)) : origin]
+        sensors = None if sensors_by_well is None else sensors_by_well[well_id]
         for horizon_h in HORIZONS:
-            row = build_features(window, horizon_h, clip_range).iloc[[-1]]
-            for model, pred in predict_all(pipelines[(well_id, horizon_h)], row, clip_range).items():
+            key = (well_id, horizon_h)
+            row = build_features(window, horizon_h, clip_range, origin_sensors=sensors).iloc[[-1]]
+            predictions = predict_all(
+                pipelines[key], row, clip_range, bonus=None if bonus_pipelines is None else bonus_pipelines[key],
+            )
+            for model, pred in predictions.items():
                 parts.append(
                     {
                         "well_id": well_id,

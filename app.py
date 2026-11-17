@@ -307,7 +307,7 @@ def render_quality(conn, catalog, meta, selection) -> None:
 # ---------------------------------------------------------------- forecast
 
 def _metric_table(metrics):
-    order = {model: index for index, model in enumerate(queries.MODELS)}
+    order = {model: index for index, model in enumerate(queries.FORECAST_MODELS)}
     table = metrics.sort_values(["horizon_h", "model"], key=lambda c: c.map(order) if c.name == "model" else c)
     table["model"] = table["model"].map(charts.MODEL_LABELS)
     table["mae"] = table["mae"].map(lambda value: "нет оценки" if pd.isna(value) else f"{value:.3f}")
@@ -321,7 +321,7 @@ def render_forecast(conn, catalog, meta, selection) -> None:
                 "Прогноз поддерживает pump_fillage насосных и tubing_pressure фонтанных скважин.")
         return
     target = dict(well_id=selection["well_id"], parameter=selection["parameter"])
-    published_metrics = queries.read_metrics(conn, models=queries.MODELS, **target)
+    published_metrics = queries.read_metrics(conn, models=queries.FORECAST_MODELS, **target)
     if published_metrics.empty:
         db = st.session_state.get("db_path", DEFAULT_DB)
         st.warning(f"Прогнозы ещё не рассчитаны для {target['well_id']} {target['parameter']}. "
@@ -332,7 +332,12 @@ def render_forecast(conn, catalog, meta, selection) -> None:
     controls = st.columns([2, 3, 2])
     mode = controls[0].radio("Режим", ("backtest", "release"), horizontal=True, key="forecast_mode",
                              format_func={"backtest": "Backtest на test", "release": "Последний выпуск"}.get)
-    models = controls[1].multiselect("Модели", queries.MODELS, default=list(queries.MODELS), key="models",
+    published_models = set(published_metrics["model"])
+    available = tuple(model for model in queries.FORECAST_MODELS if model in published_models)
+    if "models" not in st.session_state or st.session_state.get("forecast_model_options") != available:
+        st.session_state["forecast_model_options"] = available
+        st.session_state["models"] = list(available)
+    models = controls[1].multiselect("Модели", available, key="models",
                                      format_func=charts.MODEL_LABELS.get)
     horizon = controls[2].slider("Горизонт, ч", 1, 24, 1, key="horizon", disabled=mode != "backtest")
     if not models:
@@ -378,7 +383,7 @@ def render_forecast(conn, catalog, meta, selection) -> None:
                     use_container_width=True, key="forecast_chart")
     mae_unit = "процентных пунктах" if selection["unit"] == "%" else selection["unit"]
     st.markdown(f"**Метрики официального test** ({_label(test_start)} — {_label(test_end)}), не зависят от фильтра дат. "
-                f"MAE в {mae_unit}. n_common — общие точки всех трёх методов. "
+                f"MAE в {mae_unit}. n_common — общие точки всех опубликованных методов. "
                 "Покрытие — доля этих точек среди пригодных наблюдений цели на test.")
     shown = metrics if mode == "release" else metrics.loc[metrics["horizon_h"].eq(horizon)]
     st.dataframe(_metric_table(shown), hide_index=True, width="stretch", column_config={

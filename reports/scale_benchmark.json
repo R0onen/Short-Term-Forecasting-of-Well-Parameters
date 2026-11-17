@@ -1,0 +1,105 @@
+{
+  "source": {
+    "url": "https://huggingface.co/datasets/Arailym-tleubayeva/NK-Oil-Well-Sensor-Monitoring-v2",
+    "revision": "4004bb78ca8811a87c2892a89e457c59d22ace2b",
+    "partitions": {
+      "train": {
+        "sha256": "8bf92fd97ac9b0d7ec2e7aa61be90f335c7f3b6ab2a84634fb8758b057efe26a",
+        "rows": 206706
+      },
+      "test": {
+        "sha256": "8029113613ea2965cb94fc7bea50eee6f4c327b673ecc856d88d25dfb652c7d6",
+        "rows": 51681
+      }
+    }
+  },
+  "synthetic_input": {
+    "rows": 1000000,
+    "partition_rows": {
+      "train": 799986,
+      "test": 200014
+    },
+    "method": "Deterministically cycle rows in their original order within each partition. Split counts approximate the published train/test ratio. Duplicate measurements are intentional. This input exercises loading only."
+  },
+  "measurement": {
+    "runtime": {
+      "python": "3.12.8",
+      "pandas": "2.3.3",
+      "pyarrow": "26.0.1"
+    },
+    "chunk_rows": 50000,
+    "time": "Elapsed seconds for one run. Input generation and checksum verification are outside timing.",
+    "memory": "Memory and file sizes use MiB. Peak allocations use tracemalloc. DataFrame size uses deep memory accounting.",
+    "scope": "Chunked aggregation reads well_id and parameter and counts rows per pair. The other approaches load every column. Parquet write time is reported separately."
+  },
+  "published_loading": [
+    {
+      "approach": "CSV, default dtypes",
+      "seconds": 0.15268850000001066,
+      "peak_mb": 44.51832294464111,
+      "in_memory_mb": 85.8029375076294,
+      "file_mb": 18.9263858795166,
+      "rows": 258387
+    },
+    {
+      "approach": "CSV, category/int16 dtypes",
+      "seconds": 0.17354080000001204,
+      "peak_mb": 16.186284065246582,
+      "in_memory_mb": 5.670146942138672,
+      "file_mb": 18.9263858795166,
+      "rows": 258387
+    },
+    {
+      "approach": "CSV, chunksize=50000 aggregation",
+      "seconds": 0.15210580000001528,
+      "peak_mb": 4.523957252502441,
+      "in_memory_mb": null,
+      "file_mb": 18.9263858795166,
+      "rows": 258387
+    },
+    {
+      "approach": "Parquet (pyarrow), optimized dtypes",
+      "seconds": 0.2726573999999573,
+      "peak_mb": 2.342205047607422,
+      "in_memory_mb": 5.670433044433594,
+      "file_mb": 1.8132801055908203,
+      "rows": 258387,
+      "write_seconds": 0.27574600000002647
+    }
+  ],
+  "synthetic_loading": [
+    {
+      "approach": "CSV, default dtypes",
+      "seconds": 0.5689825000000042,
+      "peak_mb": 172.11243724822998,
+      "in_memory_mb": 332.03173828125,
+      "file_mb": 73.2238187789917,
+      "rows": 1000000
+    },
+    {
+      "approach": "CSV, category/int16 dtypes",
+      "seconds": 0.5856436999999914,
+      "peak_mb": 57.11497497558594,
+      "in_memory_mb": 21.937064170837402,
+      "file_mb": 73.2238187789917,
+      "rows": 1000000
+    },
+    {
+      "approach": "CSV, chunksize=50000 aggregation",
+      "seconds": 0.5207368000000088,
+      "peak_mb": 4.524993896484375,
+      "in_memory_mb": null,
+      "file_mb": 73.2238187789917,
+      "rows": 1000000
+    },
+    {
+      "approach": "Parquet (pyarrow), optimized dtypes",
+      "seconds": 0.02845460000003186,
+      "peak_mb": 6.518752098083496,
+      "in_memory_mb": 21.937350273132324,
+      "file_mb": 6.5106306076049805,
+      "rows": 1000000,
+      "write_seconds": 0.16440340000002607
+    }
+  ]
+}

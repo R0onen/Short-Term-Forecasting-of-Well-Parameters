@@ -1,0 +1,100 @@
+{
+  "dataset": {
+    "revision": "4004bb78ca8811a87c2892a89e457c59d22ace2b",
+    "train_sha256": "8bf92fd97ac9b0d7ec2e7aa61be90f335c7f3b6ab2a84634fb8758b057efe26a",
+    "test_sha256": "8029113613ea2965cb94fc7bea50eee6f4c327b673ecc856d88d25dfb652c7d6"
+  },
+  "environment": {
+    "python": "3.12.8",
+    "sqlite": "3.45.3",
+    "numpy": "2.3.3",
+    "pandas": "2.3.3",
+    "scikit-learn": "1.7.2",
+    "statsmodels": "0.14.6"
+  },
+  "target": "pump_fillage",
+  "selected_ridge_alpha": 10.0,
+  "test_range_inclusive": [
+    "2026-08-08 23:00:00",
+    "2026-09-30 23:00:00"
+  ],
+  "horizons_hours": [
+    1,
+    24
+  ],
+  "bonus_models": {
+    "gradient_boosting": {
+      "features": [
+        "lag_0",
+        "lag_1",
+        "lag_2",
+        "lag_3",
+        "lag_6",
+        "lag_12",
+        "lag_24",
+        "target_hour_sin",
+        "target_hour_cos",
+        "SPM",
+        "min_rod_weight",
+        "max_rod_weight"
+      ],
+      "parameters": {
+        "max_iter": 80,
+        "max_leaf_nodes": 15,
+        "learning_rate": 0.08,
+        "early_stopping": false
+      }
+    },
+    "statsmodels_ar": {
+      "estimator": "statsmodels OLS",
+      "intercept": true,
+      "features": [
+        "lag_0",
+        "lag_1",
+        "lag_2",
+        "lag_3",
+        "lag_6",
+        "lag_12",
+        "lag_24"
+      ],
+      "version": "0.14.6"
+    }
+  },
+  "comparison": [
+    {
+      "model": "naive",
+      "macro_mae": 11.986485719705072,
+      "scored_well_horizons": 168,
+      "scored_keys": 174827
+    },
+    {
+      "model": "seasonal_naive",
+      "macro_mae": 12.699991674080778,
+      "scored_well_horizons": 168,
+      "scored_keys": 174827
+    },
+    {
+      "model": "ridge",
+      "macro_mae": 10.12119909988279,
+      "scored_well_horizons": 168,
+      "scored_keys": 174827
+    },
+    {
+      "model": "gradient_boosting",
+      "macro_mae": 11.020197981345595,
+      "scored_well_horizons": 168,
+      "scored_keys": 174827
+    },
+    {
+      "model": "statsmodels_ar",
+      "macro_mae": 10.097306378622822,
+      "scored_well_horizons": 168,
+      "scored_keys": 174827
+    }
+  ],
+  "combined_publication": {
+    "backtest_predictions": 1121302,
+    "metrics": 1056,
+    "forecast_path": 1056
+  }
+}
